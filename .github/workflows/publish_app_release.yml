@@ -121,7 +121,7 @@ jobs:
         id: version
         uses: juliangruber/read-file-action@v1
         with:
-          path: assets/tv_app_version.json.json
+          path: assets/tv_app_version.json
       - name: Echo version
         run: echo "${{ fromJson(steps.version.outputs.content).version }}"
       - name: Echo version content
@@ -196,7 +196,7 @@ jobs:
         id: version
         uses: juliangruber/read-file-action@v1
         with:
-          path: assets/tv_app_version.json.json
+          path: assets/tv_app_version.json
       - name: Echo version
         run: echo "${{ fromJson(steps.version.outputs.content).version }}"
       - name: Echo version content
@@ -261,7 +261,7 @@ jobs:
         id: version
         uses: juliangruber/read-file-action@v1
         with:
-          path: assets/tv_app_version.json.json
+          path: assets/tv_app_version.json
       - name: Echo version
         run: echo "${{ fromJson(steps.version.outputs.content).version }}"
       - name: Echo version content
