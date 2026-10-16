@@ -11,10 +11,8 @@
 <h2 align="center">Simple Live</h2>
 <p align="center">简简单单的看直播</p>
 
-<!-- 截图区（发布前替换）
 ![首页](/assets/screenshot_light.jpg)
 ![直播页](/assets/screenshot_dark.jpg)
--->
 
 ## 功能特性
 
