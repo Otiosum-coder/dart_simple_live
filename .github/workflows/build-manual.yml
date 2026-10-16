@@ -13,6 +13,10 @@ on:
         description: "构建 Windows (EXE)"
         type: boolean
         default: true
+      build_linux:
+        description: "构建 Linux (zip)"
+        type: boolean
+        default: false
 
 jobs:
   # ---------------------------------------------------------------- Android APK
@@ -115,10 +119,46 @@ jobs:
           cd simple_live_app
           flutter pub get
 
+      # 插件（media_kit_libs_windows_video）在 CMake 阶段要从 GitHub 下载 mpv + ANGLE 并校验 MD5，
+      # 这是 CI 上最容易失败的一步。插件逻辑是「文件存在且 MD5 匹配就跳过下载」，所以先自己下好。
+      - name: 预下载 mpv / ANGLE 运行库
+        shell: pwsh
+        run: |
+          $dir = "simple_live_app/build/windows/x64"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $items = @(
+            @{ n = "mpv-dev-x86_64-20230924-git-652a1dd.7z"
+               u = "https://github.com/media-kit/libmpv-win32-video-build/releases/download/2023-09-24/mpv-dev-x86_64-20230924-git-652a1dd.7z"
+               md5 = "A832EF24B3A6FF97CD2560B5B9D04CD8" },
+            @{ n = "ANGLE.7z"
+               u = "https://github.com/alexmercerind/flutter-windows-ANGLE-OpenGL-ES/releases/download/v1.0.1/ANGLE.7z"
+               md5 = "E866F13E8D552348058AFAFE869B1ED" }
+          )
+          foreach ($it in $items) {
+            $out = Join-Path $dir $it.n
+            $ok = (Test-Path $out) -and ((Get-FileHash $out -Algorithm MD5).Hash -eq $it.md5)
+            if ($ok) { Write-Output "$($it.n) 已存在且校验通过"; continue }
+            for ($i = 1; $i -le 5; $i++) {
+              Write-Output "下载 $($it.n) 第 $i 次..."
+              curl.exe -L --fail --retry 3 --retry-delay 2 -o $out $it.u
+              if ((Test-Path $out) -and ((Get-FileHash $out -Algorithm MD5).Hash -eq $it.md5)) { break }
+              Start-Sleep -Seconds 3
+            }
+            if (-not ((Test-Path $out) -and ((Get-FileHash $out -Algorithm MD5).Hash -eq $it.md5))) { throw "$($it.n) 下载或校验失败" }
+            Write-Output "$($it.n) 下载完成并校验通过"
+          }
+
       - name: 构建 Windows Release
+        shell: pwsh
         run: |
           cd simple_live_app
-          flutter build windows --release
+          for ($i = 1; $i -le 2; $i++) {
+            flutter build windows --release
+            if ($LASTEXITCODE -eq 0) { Write-Output "构建成功"; exit 0 }
+            Write-Output "第 $i 次构建失败，清理 CMake 缓存后重试"
+            Remove-Item "build\windows\x64\CMakeCache.txt" -Force -ErrorAction SilentlyContinue
+          }
+          exit 1
 
       - name: 打包为 zip（exe + 全部依赖 DLL，解压即用）
         shell: pwsh
@@ -135,4 +175,54 @@ jobs:
         with:
           name: windows-exe-${{ steps.version.outputs.VERSION }}
           path: SimpleLive-*-windows-x64.zip
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------- Linux
+  build-linux:
+    if: ${{ inputs.build_linux }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 读取版本号
+        id: version
+        shell: bash
+        run: |
+          V=$(grep -m1 '^version:' simple_live_app/pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
+          echo "VERSION=${V:-dev}" >> "$GITHUB_OUTPUT"
+
+      # media_kit 在 Linux 上用系统 libmpv，必须装齐桌面构建依赖
+      - name: 安装系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libasound2-dev libmpv-dev
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.38.x"
+          cache: true
+
+      - name: 打开 Linux 桌面支持
+        run: flutter config --enable-linux-desktop
+
+      - name: 拉依赖
+        run: |
+          cd simple_live_app
+          flutter pub get
+
+      - name: 构建 Linux
+        run: |
+          cd simple_live_app
+          flutter build linux --release
+
+      - name: 打包为 zip
+        run: |
+          cd simple_live_app/build/linux/x64/release
+          zip -r "SimpleLive-${{ steps.version.outputs.VERSION }}-linux-x64.zip" bundle
+
+      - name: 上传 Linux
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ steps.version.outputs.VERSION }}
+          path: simple_live_app/build/linux/x64/release/*.zip
           if-no-files-found: error
