@@ -9,7 +9,9 @@ import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/sync_client_info_model.dart';
 import 'package:simple_live_app/routes/route_path.dart';
+import 'package:simple_live_app/modules/mine/account/douyu/douyu_login_sheet.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
+import 'package:simple_live_app/services/douyu_account_service.dart';
 import 'package:simple_live_app/services/sync_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
@@ -46,6 +48,30 @@ class AppNavigator {
         await toBiliBiliLogin();
         if (!BiliBiliAccountService.instance.logined.value) {
           SmartDialog.showToast("未完成登录");
+        }
+      }
+    }
+
+    if (site.id == Constant.kDouyu &&
+        !DouyuAccountService.instance.logined.value &&
+        AppSettingsController.instance.douyuLoginTip.value) {
+      var result = await Utils.showAlertDialog(
+        "斗鱼更新了新的限制：未登录观看原画 / 蓝光4M 会在 10 分钟后被中断，超清不受影响。\n是否前往登录？",
+        title: "登录斗鱼",
+        actions: [
+          TextButton(
+            onPressed: () {
+              AppSettingsController.instance.setDouyuLoginTip(false);
+              Get.back(result: false);
+            },
+            child: const Text("不再提示"),
+          ),
+        ],
+      );
+      if (result == true) {
+        showDouyuLoginSheet();
+        if (!DouyuAccountService.instance.logined.value) {
+          SmartDialog.showToast("可稍后在「我的-账号管理」中登录斗鱼");
         }
       }
     }

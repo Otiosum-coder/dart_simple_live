@@ -57,12 +57,12 @@ class CategoryListView extends StatelessWidget {
                         children: item.showAll.value
                             ? (item.children
                                 .map(
-                                  (e) => buildSubCategory(e),
+                                  (e) => buildSubCategory(context, e),
                                 )
                                 .toList())
                             : (item.take15
                                 .map(
-                                  (e) => buildSubCategory(e),
+                                  (e) => buildSubCategory(context, e),
                                 )
                                 .toList()
                               ..add(buildShowMore(item))),
@@ -78,7 +78,7 @@ class CategoryListView extends StatelessWidget {
     );
   }
 
-  Widget buildSubCategory(LiveSubCategory item) {
+  Widget buildSubCategory(BuildContext context, LiveSubCategory item) {
     return ShadowCard(
       onTap: () {
         AppNavigator.toCategoryDetail(site: controller.site, category: item);
@@ -86,12 +86,7 @@ class CategoryListView extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          NetImage(
-            item.pic ?? "",
-            width: 40,
-            height: 40,
-            borderRadius: 8,
-          ),
+          buildSubCategoryIcon(context, item),
           AppStyle.vGap4,
           Text(
             item.name,
@@ -102,6 +97,101 @@ class CategoryListView extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  /// 子分类图标：有封面图就用封面，没有就用按名称映射的语义图标兜底
+  ///
+  /// 抖音的分类接口（解析 live.douyin.com 首页）不返回封面，pic 恒为空字符串，
+  /// 只显示文字会显得很空；这里按分类名映射一个图标，其它平台缺封面时同样受益。
+  Widget buildSubCategoryIcon(BuildContext context, LiveSubCategory item) {
+    var pic = (item.pic ?? "").trim();
+    if (pic.isNotEmpty) {
+      return NetImage(
+        pic,
+        width: 40,
+        height: 40,
+        borderRadius: 8,
+        // 抖音分类图的域名常需要 Referer；失败了也不要留破图，回落到语义图标
+        headers: const {"Referer": "https://live.douyin.com/"},
+        failedWidget: buildCategoryIconBox(context, item),
+      );
+    }
+    return buildCategoryIconBox(context, item);
+  }
+
+  /// 语义图标兜底（分类图缺失或加载失败时用）
+  Widget buildCategoryIconBox(BuildContext context, LiveSubCategory item) {
+    var color = Theme.of(context).colorScheme.primary;
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withAlpha(40)),
+        color: color.withAlpha(18),
+      ),
+      child: Icon(
+        categoryIconByName(item.name),
+        size: 22,
+        color: color,
+      ),
+    );
+  }
+
+  /// 分类名 → 图标（按关键词匹配，匹配不到给一个通用图标）
+  IconData categoryIconByName(String name) {
+    if (name.contains("游戏") ||
+        name.contains("电竞") ||
+        name.contains("手游") ||
+        name.contains("赛事")) {
+      return Icons.sports_esports_rounded;
+    }
+    if (name.contains("唱") || name.contains("音乐") || name.contains("电台")) {
+      return Icons.music_note_rounded;
+    }
+    if (name.contains("舞") || name.contains("才艺") || name.contains("颜值")) {
+      return Icons.auto_awesome_rounded;
+    }
+    if (name.contains("聊天") || name.contains("交友") || name.contains("情感")) {
+      return Icons.forum_rounded;
+    }
+    if (name.contains("美食") || name.contains("吃")) {
+      return Icons.restaurant_rounded;
+    }
+    if (name.contains("户外") || name.contains("旅行") || name.contains("风景")) {
+      return Icons.landscape_rounded;
+    }
+    if (name.contains("知识") || name.contains("教育") || name.contains("课堂")) {
+      return Icons.school_rounded;
+    }
+    if (name.contains("体育") || name.contains("运动") || name.contains("健身")) {
+      return Icons.sports_basketball_rounded;
+    }
+    if (name.contains("购物") || name.contains("带货") || name.contains("电商")) {
+      return Icons.shopping_bag_rounded;
+    }
+    if (name.contains("二") && name.contains("次")) {
+      return Icons.animation_rounded;
+    }
+    if (name.contains("汽车") || name.contains("车")) {
+      return Icons.directions_car_rounded;
+    }
+    if (name.contains("科技") || name.contains("数码") || name.contains("电脑")) {
+      return Icons.memory_rounded;
+    }
+    if (name.contains("生活") || name.contains("日常")) {
+      return Icons.weekend_rounded;
+    }
+    if (name.contains("娱乐") || name.contains("综艺")) {
+      return Icons.celebration_rounded;
+    }
+    if (name.contains("亲子") || name.contains("萌娃") || name.contains("育儿")) {
+      return Icons.child_care_rounded;
+    }
+    if (name.contains("热门") || name.contains("推荐")) {
+      return Icons.local_fire_department_rounded;
+    }
+    return Icons.live_tv_rounded;
   }
 
   Widget buildShowMore(AppLiveCategory item) {

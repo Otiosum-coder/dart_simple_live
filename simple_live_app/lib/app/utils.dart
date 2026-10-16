@@ -468,6 +468,71 @@ class Utils {
     return Colors.white;
   }
 
+  /// 解析颜色字符串，兼容 #RRGGBB / RRGGBB / AARRGGBB / 0x 前缀 / 十进制整数
+  ///
+  /// 解析不出来返回 null（不要静默变成白色）
+  static Color? parseHexColor(String value) {
+    var text = value.trim();
+    if (text.isEmpty) return null;
+    var isDecimal = !text.startsWith("#") &&
+        !text.toLowerCase().startsWith("0x") &&
+        !RegExp(r'[a-fA-F]').hasMatch(text) &&
+        text.length > 6;
+    text = text
+        .replaceAll("#", "")
+        .replaceAll("0x", "")
+        .replaceAll("0X", "")
+        .trim();
+    try {
+      if (isDecimal) {
+        // B站弹幕协议里颜色是十进制的 RGB 整数
+        var v = int.parse(text);
+        return Color.fromARGB(255, (v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
+      }
+      if (text.length == 6) {
+        return Color.fromARGB(255, int.parse(text.substring(0, 2), radix: 16),
+            int.parse(text.substring(2, 4), radix: 16),
+            int.parse(text.substring(4, 6), radix: 16));
+      }
+      if (text.length == 8) {
+        var v = int.parse(text, radix: 16);
+        return Color.fromARGB(
+            (v >> 24) & 0xFF, (v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
+      }
+    } catch (e) {
+      return null;
+    }
+    return null;
+  }
+
+  /// B站 SC 金额档位兜底色（接口没给颜色时用）
+  static Color superChatTierColor(int price) {
+    if (price >= 2000) return const Color(0xFFA0228C); // 紫红
+    if (price >= 1000) return const Color(0xFFD64545); // 红
+    if (price >= 500) return const Color(0xFFE8722C); // 橙
+    if (price >= 100) return const Color(0xFFF0A83C); // 金
+    if (price >= 50) return const Color(0xFF00AEEC); // 青
+    return const Color(0xFF2A60B2); // 蓝
+  }
+
+  /// SC 档位色：优先用接口给的 background_bottom_color
+  static Color superChatColor({required String color, required int price}) {
+    var parsed = parseHexColor(color);
+    if (parsed != null && parsed.a > 0) {
+      return parsed;
+    }
+    return superChatTierColor(price);
+  }
+
+  /// 底板混入档位色的比例：金额越大越浓（一眼能分辨档位）
+  static double superChatTintAmount(int price) {
+    if (price >= 1000) return 0.30;
+    if (price >= 500) return 0.26;
+    if (price >= 100) return 0.22;
+    if (price >= 50) return 0.19;
+    return 0.16;
+  }
+
   /// 复制内容到剪贴板
   static void copyToClipboard(String text) async {
     try {

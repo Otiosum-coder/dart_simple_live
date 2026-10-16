@@ -1,4 +1,7 @@
 import 'dart:io';
+import 'package:simple_live_app/widgets/danmaku_input_bar.dart';
+import 'package:simple_live_app/widgets/net_image.dart';
+import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
@@ -15,9 +18,6 @@ import 'package:simple_live_app/services/follow_service.dart';
 import 'package:simple_live_app/widgets/desktop_refresh_button.dart';
 import 'package:simple_live_app/widgets/follow_user_item.dart';
 import 'package:window_manager/window_manager.dart';
-import 'package:simple_live_app/widgets/superchat_card.dart';
-import 'dart:async';
-import 'package:simple_live_core/simple_live_core.dart';
 
 Widget playerControls(
   VideoState videoState,
@@ -42,6 +42,8 @@ Widget buildFullControls(
   VideoState videoState,
   LiveRoomController controller,
 ) {
+  // 竖屏：画面内不显示 SC（用专门的 SC 页面看）
+  var isPortrait = videoState.context.orientation == Orientation.portrait;
   var padding = MediaQuery.of(videoState.context).padding;
   GlobalKey volumeButtonkey = GlobalKey();
   return DragToMoveArea(
@@ -50,16 +52,20 @@ Widget buildFullControls(
         Container(),
         buildDanmuView(videoState, controller),
 
-        // 左下角SC显示
+        // 左下角SC显示（竖屏不显示）
         Obx(
           () => Visibility(
             visible: AppSettingsController.instance.playershowSuperChat.value &&
+                !isPortrait &&
                 ((!Platform.isAndroid && !Platform.isIOS) ||
                     controller.fullScreenState.value),
             child: Positioned(
-              left: 24,
-              bottom: 24,
-              child: PlayerSuperChatOverlay(controller: controller),
+              left: 14,
+              bottom: 38,
+              child: PlayerSuperChatOverlay(
+                controller: controller,
+                isPortrait: isPortrait,
+              ),
             ),
           ),
         ),
@@ -296,6 +302,28 @@ Widget buildFullControls(
                     ),
                   ),
                   const Expanded(child: Center()),
+                  // 发言：全屏下没有常驻输入框，点这里唤起（桌面也可直接按回车）
+                  Obx(
+                    () {
+                      var canSend =
+                          AppSettingsController.instance.playerSendDanmaku.value &&
+                              controller.canSendDanmaku.value;
+                      if (!canSend) {
+                        return const SizedBox.shrink();
+                      }
+                      return IconButton(
+                        onPressed: () {
+                          controller.showDanmakuInput.value =
+                              !controller.showDanmakuInput.value;
+                        },
+                        icon: const Icon(
+                          Remix.chat_3_line,
+                          size: 24,
+                          color: Colors.white,
+                        ),
+                      );
+                    },
+                  ),
                   Visibility(
                     visible: !Platform.isAndroid && !Platform.isIOS,
                     child: IconButton(
@@ -393,6 +421,8 @@ Widget buildFullControls(
             ),
           ),
         ),
+        // 弹幕输入条放最后：必须在手势层之上，否则鼠标点不中输入框
+        DanmakuInputOverlay(controller: controller),
       ],
     ),
   );
@@ -436,16 +466,20 @@ Widget buildControls(
       Container(),
       buildDanmuView(videoState, controller),
 
-      // 左下角SC显示
+      // 左下角SC显示（竖屏不显示）
       Obx(
         () => Visibility(
           visible: AppSettingsController.instance.playershowSuperChat.value &&
+              !isPortrait &&
               ((!Platform.isAndroid && !Platform.isIOS) ||
                   controller.fullScreenState.value),
           child: Positioned(
-            left: 24,
-            bottom: 24,
-            child: PlayerSuperChatOverlay(controller: controller),
+            left: 14,
+            bottom: 38,
+            child: PlayerSuperChatOverlay(
+              controller: controller,
+              isPortrait: isPortrait,
+            ),
           ),
         ),
       ),
@@ -696,7 +730,8 @@ void showLinesInfo(LiveRoomController controller) {
           selected: controller.currentLineIndex == i,
           title: Text.rich(
             TextSpan(
-              text: "线路${i + 1}",
+              // 音频线路单独标注（斗鱼专有：&only-audio=1，只拉音频）
+              text: controller.lineLabel(i),
               children: [
                 WidgetSpan(
                     child: Container(
@@ -709,7 +744,11 @@ void showLinesInfo(LiveRoomController controller) {
                   padding: AppStyle.edgeInsetsH4,
                   margin: AppStyle.edgeInsetsL8,
                   child: Text(
-                    controller.playUrls[i].contains(".flv") ? "FLV" : "HLS",
+                    controller.audioLineIndex == i
+                        ? "音频"
+                        : (controller.playUrls[i].contains(".flv")
+                            ? "FLV"
+                            : "HLS"),
                     style: const TextStyle(
                       fontSize: 12,
                     ),
@@ -724,7 +763,7 @@ void showLinesInfo(LiveRoomController controller) {
             Utils.hideRightDialog();
             //controller.currentLineIndex = i;
             //controller.setPlayer();
-            controller.changePlayLine(i);
+            controller.changePlayLine(i, fromUser: true);
           },
         );
       },
@@ -899,148 +938,265 @@ void showFollowUser(LiveRoomController controller) {
   );
 }
 
-class PlayerSuperChatCard extends StatefulWidget {
-  final LiveSuperChatMessage message;
-  final VoidCallback onExpire;
-  final int duration;
-  const PlayerSuperChatCard(
-      {required this.message,
-      required this.onExpire,
-      required this.duration,
-      Key? key})
-      : super(key: key);
-  @override
-  State<PlayerSuperChatCard> createState() => _PlayerSuperChatCardState();
-}
-
-class _PlayerSuperChatCardState extends State<PlayerSuperChatCard> {
-  late Timer timer;
-  late int countdown;
-  @override
-  void initState() {
-    super.initState();
-    countdown = widget.duration;
-    timer = Timer.periodic(const Duration(seconds: 1), (t) {
-      if (countdown <= 1) {
-        widget.onExpire();
-        timer.cancel();
-        return;
-      }
-      setState(() {
-        countdown -= 1;
-      });
-    });
-  }
-
-  @override
-  void dispose() {
-    timer.cancel();
-    super.dispose();
-  }
+/// 画面内 SC 卡片（样式 A：深色毛玻璃 + 左侧平台色条）
+///
+/// - 字号固定，不随屏幕缩放
+/// - 正文不透明保证可读；平台色只用在色条与进度条上
+/// 画面内 SC 卡片
+///
+/// - 档位色（金额色）：优先取接口的 background_bottom_color，取不到按金额兜底
+/// - 底板 = 深色底 + 档位色，金额越大越浓（一眼能看出档位）
+/// - 价格徽章用档位色实底；字号固定不随屏幕缩放
+/// - 入场 350ms 高亮一下，提示来了新 SC
+class SuperChatOverlayCard extends StatelessWidget {
+  final OverlaySuperChat data;
+  const SuperChatOverlayCard(this.data, {Key? key}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    return Opacity(
-      opacity: 0.65,
-      child: SuperChatCard(
-        widget.message,
-        onExpire: () {},
-        customCountdown: countdown,
+    var message = data.message;
+    var accent = Utils.superChatColor(
+      color: message.backgroundBottomColor,
+      price: message.price,
+    );
+    // 底板：深色底混入档位色，金额越大越浓
+    var background = Color.alphaBlend(
+      accent.withValues(alpha: Utils.superChatTintAmount(message.price)),
+      const Color(0xCC0C0F13),
+    );
+    // 徽章上的文字颜色按色块亮度自动选
+    var badgeInk = accent.computeLuminance() > 0.55
+        ? const Color(0xFF20160A)
+        : Colors.white;
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeOut,
+      builder: (context, t, child) {
+        // t: 0 → 刚出现（高亮），1 → 常态
+        return Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(11),
+            boxShadow: [
+              BoxShadow(
+                color: accent.withValues(alpha: 0.35 * (1 - t)),
+                blurRadius: 18,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(11),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(11, 8, 11, 8),
+                decoration: BoxDecoration(
+                  color: background,
+                  borderRadius: BorderRadius.circular(11),
+                  border: Border.all(
+                    color: accent.withValues(alpha: 0.30 + 0.60 * (1 - t)),
+                  ),
+                ),
+                child: child,
+              ),
+            ),
+          ),
+        );
+      },
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          NetImage(
+            message.face,
+            width: 32,
+            height: 32,
+            borderRadius: 32,
+          ),
+          AppStyle.hGap8,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        message.userName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                    AppStyle.hGap8,
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 1,
+                      ),
+                      decoration: BoxDecoration(
+                        color: accent,
+                        borderRadius: BorderRadius.circular(5),
+                      ),
+                      child: Text(
+                        "￥${message.price}",
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w600,
+                          color: badgeInk,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 3),
+                // 全文展开，不截断
+                Text(
+                  message.message,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    height: 1.42,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                // 剩余时间：细进度条，用档位色
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(2),
+                  child: LinearProgressIndicator(
+                    value: data.progress,
+                    minHeight: 2,
+                    backgroundColor: Colors.white.withValues(alpha: 0.18),
+                    valueColor: AlwaysStoppedAnimation<Color>(accent),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-class LocalDisplaySC {
-  final LiveSuperChatMessage sc;
-  final DateTime expireAt;
-  final int duration;
-  LocalDisplaySC(this.sc, this.expireAt, this.duration);
-}
-
-class PlayerSuperChatOverlay extends StatefulWidget {
+/// 画面内 SC 悬浮层
+///
+/// 竖屏不显示（竖屏用专门的 SC 页面查看）；横屏/宽屏显示在左下角。
+/// 显示时长完全由 controller 里的 expireAt 决定，所以切全屏/旋转/重建都不会重置。
+class PlayerSuperChatOverlay extends StatelessWidget {
   final LiveRoomController controller;
-  const PlayerSuperChatOverlay({required this.controller, Key? key})
-      : super(key: key);
+  final bool isPortrait;
+  const PlayerSuperChatOverlay({
+    required this.controller,
+    this.isPortrait = false,
+    Key? key,
+  }) : super(key: key);
+
   @override
-  State<PlayerSuperChatOverlay> createState() => _PlayerSuperChatOverlayState();
+  Widget build(BuildContext context) {
+    if (isPortrait) {
+      return const SizedBox.shrink();
+    }
+    return IgnorePointer(
+      child: Obx(
+        () {
+          var list = controller.overlaySuperChats;
+          if (list.isEmpty) {
+            return const SizedBox.shrink();
+          }
+          return SizedBox(
+            width: 360,
+            child: TopFadeColumn(
+              maxHeight: MediaQuery.of(context).size.height * 0.55,
+              children: [
+                // 最新的在最下面，旧的往上顶
+                for (var item in list.reversed) ...[
+                  SuperChatOverlayCard(item),
+                  const SizedBox(height: 6),
+                ],
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
 }
 
-class _PlayerSuperChatOverlayState extends State<PlayerSuperChatOverlay> {
-  final List<LocalDisplaySC> _displayed = [];
-  final Map<LocalDisplaySC, Timer> _timers = {};
-  late Worker _worker;
+/// 底部对齐、超出高度时从顶部渐隐的竖排列
+class TopFadeColumn extends StatefulWidget {
+  final double maxHeight;
+  final List<Widget> children;
+  const TopFadeColumn({
+    required this.maxHeight,
+    required this.children,
+    Key? key,
+  }) : super(key: key);
 
-  void _addSC(LiveSuperChatMessage sc, {int? customSeconds}) {
-    if (_displayed.any((e) => e.sc == sc)) return;
-    int showSeconds = customSeconds ?? 15;
-    final expireAt = DateTime.now().add(Duration(seconds: showSeconds));
-    final localSC = LocalDisplaySC(sc, expireAt, showSeconds);
-    _displayed.add(localSC);
-    _timers[localSC] = Timer(Duration(seconds: showSeconds), () {
-      setState(() {
-        _displayed.remove(localSC);
-        _timers.remove(localSC)?.cancel();
-      });
-    });
-    setState(() {});
-  }
+  @override
+  State<TopFadeColumn> createState() => _TopFadeColumnState();
+}
+
+class _TopFadeColumnState extends State<TopFadeColumn> {
+  final ScrollController _scrollController = ScrollController();
+  bool _overflow = false;
 
   @override
   void initState() {
     super.initState();
-    // 首次进房时同步已有SC
-    final now = DateTime.now().millisecondsSinceEpoch;
-    for (var sc in widget.controller.superChats) {
-      int remain = (sc.endTime.millisecondsSinceEpoch - now) ~/ 1000;
-      if (remain > 0) {
-        _addSC(sc, customSeconds: remain < 15 ? remain : 15);
-      }
+    _scrollController.addListener(_checkOverflow);
+  }
+
+  void _checkOverflow() {
+    var overflow = _scrollController.hasClients &&
+        _scrollController.position.maxScrollExtent > 0;
+    if (overflow != _overflow && mounted) {
+      setState(() => _overflow = overflow);
     }
-    // 监听SC列表变化
-    _worker =
-        ever<List<LiveSuperChatMessage>>(widget.controller.superChats, (list) {
-      // 新增
-      for (var sc in list) {
-        if (!_displayed.any((e) => e.sc == sc)) {
-          _addSC(sc);
-        }
-      }
-      // 移除
-      _displayed.removeWhere((e) => !list.contains(e.sc));
-      setState(() {});
-    });
   }
 
   @override
   void dispose() {
-    _worker.dispose();
-    for (var t in _timers.values) {
-      t.cancel();
-    }
+    _scrollController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final sorted = _displayed.toList()
-      ..sort((a, b) => a.sc.endTime.compareTo(b.sc.endTime));
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (var localSC in sorted)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: SizedBox(
-              width: 240,
-              child: PlayerSuperChatCard(
-                message: localSC.sc,
-                onExpire: () {},
-                duration: localSC.duration,
-              ),
-            ),
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkOverflow());
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: widget.maxHeight),
+      child: ShaderMask(
+        // 只有内容放不下（被裁掉）时才需要顶部渐隐
+        shaderCallback: (rect) => LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: _overflow
+              ? const [
+                  Color(0x00FFFFFF),
+                  Color(0xFFFFFFFF),
+                  Color(0xFFFFFFFF),
+                ]
+              : const [Color(0xFFFFFFFF), Color(0xFFFFFFFF)],
+          stops: _overflow ? const [0.0, 0.12, 1.0] : null,
+        ).createShader(rect),
+        blendMode: BlendMode.dstIn,
+        child: SingleChildScrollView(
+          controller: _scrollController,
+          physics: const NeverScrollableScrollPhysics(),
+          reverse: true,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: widget.children,
           ),
-      ],
+        ),
+      ),
     );
   }
 }

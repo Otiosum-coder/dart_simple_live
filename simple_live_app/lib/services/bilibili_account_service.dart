@@ -25,6 +25,8 @@ class BiliBiliAccountService extends GetxService {
     cookie = LocalStorageService.instance
         .getValue(LocalStorageService.kBilibiliCookie, "");
     logined.value = cookie.isNotEmpty;
+    // 先把已保存的 cookie 应用到站点，避免校验接口偶发失败时接口层还用着旧 cookie
+    setSite();
     loadUserInfo();
     super.onInit();
   }
@@ -65,6 +67,11 @@ class BiliBiliAccountService extends GetxService {
     LocalStorageService.instance
         .setValue(LocalStorageService.kBilibiliCookie, cookie);
     logined.value = cookie.isNotEmpty;
+    // 关键：立刻应用到站点。以前只在 loadUserInfo 成功后 setSite()，
+    // 而 WebView / 二维码登录只调 setCookie()，导致登录成功但站点仍用旧 cookie
+    // （重启后才生效）—— 移动端"登录了却像掉登录"就是这么来的
+    setSite();
+    loadUserInfo();
   }
 
   void logout() async {

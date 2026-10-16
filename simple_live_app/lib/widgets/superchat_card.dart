@@ -31,7 +31,15 @@ class _SuperChatCardState extends State<SuperChatCard> {
     var currentTime = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     var endTime = widget.message.endTime.millisecondsSinceEpoch ~/ 1000;
 
+    // 不能为负数：进房时批量拉回的历史 SC，endTime 往往已经过去
     countdown = endTime - currentTime;
+    if (countdown <= 0) {
+      countdown = 0;
+      // 首帧就请求移除，避免先渲染出 -2 这种数字
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        widget.onExpire?.call();
+      });
+    }
 
     timer = Timer.periodic(const Duration(seconds: 1), timerCallback);
 
@@ -52,7 +60,9 @@ class _SuperChatCardState extends State<SuperChatCard> {
 
   @override
   Widget build(BuildContext context) {
-    final displayCountdown = widget.customCountdown ?? countdown;
+    // 双保险：任何情况下都不显示负数
+    final displayCountdown =
+        (widget.customCountdown ?? countdown).clamp(0, 1 << 30);
     return ClipRRect(
       borderRadius: AppStyle.radius8,
       child: Container(

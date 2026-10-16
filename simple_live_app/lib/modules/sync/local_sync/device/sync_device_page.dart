@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 import 'package:remixicon/remixicon.dart';
 import 'package:simple_live_app/app/app_style.dart';
 import 'package:simple_live_app/modules/sync/local_sync/device/sync_device_controller.dart';
+import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/widgets/settings/settings_card.dart';
 
 class SyncDevicePage extends GetView<SyncDeviceController> {
@@ -21,8 +22,12 @@ class SyncDevicePage extends GetView<SyncDeviceController> {
             child: ListTile(
               leading: buildIcon(),
               title: Text(controller.info.name),
+              // 双方关注数量放在一起，方便判断同步方向
               subtitle: Text(
-                  "${controller.info.type.toUpperCase()}   ${controller.info.address}"),
+                  "${controller.info.type.toUpperCase()}   ${controller.info.address}\n"
+                  "对方关注：${controller.info.followCount} 个   ·   "
+                  "本机关注：${DBService.instance.getFollowList().length} 个"),
+              isThreeLine: true,
             ),
           ),
           AppStyle.vGap12,
@@ -34,7 +39,7 @@ class SyncDevicePage extends GetView<SyncDeviceController> {
                   title: const Text("同步关注列表"),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () {
-                    controller.syncFollowAndTag();
+                    controller.showSyncDirectionSheet();
                   },
                 ),
                 AppStyle.divider,

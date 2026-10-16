@@ -73,20 +73,10 @@ class DouyinSite implements LiveSite {
       header: await getRequestHeaders(),
     );
 
-    var renderData =
-        RegExp(
-          r'\{\\"pathname\\":\\"\/\\",\\"categoryData.*?\]\\n',
-        ).firstMatch(result)?.group(0) ??
-        "";
-    var renderDataJson = json.decode(
-      renderData
-          .trim()
-          .replaceAll('\\"', '"')
-          .replaceAll(r"\\", r"\")
-          .replaceAll(']\\n', ""),
-    );
+    final renderDataJson = _extractCategoryRenderData(result);
+    final categoryData = (renderDataJson["categoryData"] as List?) ?? const [];
 
-    for (var item in renderDataJson["categoryData"]) {
+    for (var item in categoryData) {
       List<LiveSubCategory> subs = [];
       var id = '${item["partition"]["id_str"]},${item["partition"]["type"]}';
       for (var subItem in item["sub_partition"]) {
@@ -94,7 +84,9 @@ class DouyinSite implements LiveSite {
           id: '${subItem["partition"]["id_str"]},${subItem["partition"]["type"]}',
           name: asT<String?>(subItem["partition"]["title"]) ?? "",
           parentId: id,
-          pic: "",
+          // 子分类没有图就退回父分区的图，最后再交给界面的图标兜底
+          pic: _pickPartitionImageUrl(subItem["partition"]) ??
+              _pickPartitionImageUrl(item["partition"]),
         );
         subs.add(subCategory);
       }
@@ -110,7 +102,7 @@ class DouyinSite implements LiveSite {
           id: category.id,
           name: category.name,
           parentId: category.id,
-          pic: "",
+          pic: _pickPartitionImageUrl(item["partition"]),
         ),
       );
       categories.add(category);
@@ -118,7 +110,6 @@ class DouyinSite implements LiveSite {
     return categories;
   }
 
-  @override
   Future<LiveCategoryResult> getCategoryRooms(
     LiveSubCategory category, {
     int page = 1,
@@ -258,6 +249,12 @@ class DouyinSite implements LiveSite {
     // 读取房间信息
     var roomData = await _getRoomDataByRoomId(roomId);
 
+    // 房间不存在时抖音返回 status_code != 0 且 data.room 为空
+    var roomNode = roomData["data"] is Map ? roomData["data"]["room"] : null;
+    if (asT<int?>(roomData["status_code"]) != 0 || roomNode is! Map) {
+      return _notFoundDetail(roomId, "https://live.douyin.com/$roomId");
+    }
+
     // 通过房间信息获取WebRid
     var webRid = roomData["data"]["room"]["owner"]["web_rid"].toString();
 
@@ -279,6 +276,13 @@ class DouyinSite implements LiveSite {
     }
 
     var roomStatus = status == 2;
+    // 开播时间：reflow 接口已经一并返回，无需额外请求
+    // 直播中为本场开播时间，未开播时为上一次开播时间
+    var showTime = LiveDuration.parse(room["start_time"]) ??
+        LiveDuration.parse(room["create_time"]);
+    if (roomStatus) {
+      LiveDuration.log("抖音", webRid, showTime);
+    }
     // 主要是为了获取cookie,用于弹幕websocket连接
     var headers = await getRequestHeaders();
 
@@ -302,6 +306,23 @@ class DouyinSite implements LiveSite {
         cookie: headers["cookie"],
       ),
       data: room["stream_url"],
+      showTime: roomStatus ? showTime : null,
+      lastLiveTime: roomStatus ? null : showTime,
+    );
+  }
+
+  /// 房间不存在时返回的空详情
+  LiveRoomDetail _notFoundDetail(String roomId, String url) {
+    return LiveRoomDetail(
+      roomId: roomId,
+      title: "",
+      cover: "",
+      userName: "",
+      userAvatar: "",
+      online: 0,
+      status: false,
+      url: url,
+      roomNotFound: true,
     );
   }
 
@@ -325,7 +346,11 @@ class DouyinSite implements LiveSite {
     // 读取房间信息
     var data = await _getRoomDataByApi(webRid);
 
-    var roomData = data["data"][0];
+    var list = data["data"];
+    if (list is! List || list.isEmpty) {
+      return _notFoundDetail(webRid, "https://live.douyin.com/$webRid");
+    }
+    var roomData = list[0];
     var userData = data["user"];
     var roomId = roomData["id_str"].toString();
 
@@ -337,6 +362,13 @@ class DouyinSite implements LiveSite {
     var owner = roomData["owner"];
 
     var roomStatus = (asT<int?>(roomData["status"]) ?? 0) == 2;
+
+    // 开播时间：web/enter 接口不返回，需要用 19 位 roomId 调 reflow 接口
+    // 直播中为本场开播时间，未开播时为上一次开播时间
+    var showTime = await _getLiveStartTimeByRoomId(roomId);
+    if (roomStatus) {
+      LiveDuration.log("抖音", roomId, showTime);
+    }
 
     // 主要是为了获取cookie,用于弹幕websocket连接
     var headers = await getRequestHeaders();
@@ -364,6 +396,8 @@ class DouyinSite implements LiveSite {
         cookie: headers["cookie"],
       ),
       data: roomStatus ? roomData["stream_url"] : {},
+      showTime: roomStatus ? showTime : null,
+      lastLiveTime: roomStatus ? null : showTime,
     );
   }
 
@@ -380,6 +414,13 @@ class DouyinSite implements LiveSite {
     var owner = room["owner"];
     var anchor = roomData["roomStore"]["roomInfo"]["anchor"];
     var roomStatus = (asT<int?>(room["status"]) ?? 0) == 2;
+
+    // 开播时间：网页 HTML 里没有，用 19 位 roomId 调 reflow 接口
+    // 直播中为本场开播时间，未开播时为上一次开播时间
+    var showTime = await _getLiveStartTimeByRoomId(roomId);
+    if (roomStatus) {
+      LiveDuration.log("抖音", roomId, showTime);
+    }
 
     // 主要是为了获取cookie,用于弹幕websocket连接
     var headers = await getRequestHeaders();
@@ -408,6 +449,8 @@ class DouyinSite implements LiveSite {
         cookie: headers["cookie"],
       ),
       data: roomStatus ? room["stream_url"] : {},
+      showTime: roomStatus ? showTime : null,
+      lastLiveTime: roomStatus ? null : showTime,
     );
   }
 
@@ -533,6 +576,40 @@ class DouyinSite implements LiveSite {
       header: await getRequestHeaders(),
     );
     return result;
+  }
+
+  /// 通过 19 位房间 ID 获取开播时间（秒级时间戳字符串）
+  ///
+  /// web/enter 接口不返回开播时间，只有 reflow 接口的 data.room.start_time 才有；
+  /// create_time（房间创建时间）比 start_time 早几秒，可作为兜底。
+  /// 注意：未开播时这两个值是上一场的，调用方需先判断直播状态。
+  Future<String?> _getLiveStartTimeByRoomId(String roomId19) async {
+    try {
+      var result = await HttpClient.instance.getJson(
+        'https://webcast.amemv.com/webcast/room/reflow/info/',
+        queryParameters: {
+          'type_id': 0,
+          'live_id': 1,
+          'room_id': roomId19,
+          'sec_user_id': '',
+          'version_code': '99.99.99',
+          'app_id': 6383,
+        },
+        header: await getRequestHeaders(),
+      );
+      if (result is! Map) {
+        return null;
+      }
+      var room = result["data"]?["room"];
+      if (room == null) {
+        return null;
+      }
+      return LiveDuration.parse(room["start_time"]) ??
+          LiveDuration.parse(room["create_time"]);
+    } catch (e) {
+      CoreLog.error(e);
+      return null;
+    }
   }
 
   @override
@@ -753,6 +830,25 @@ class DouyinSite implements LiveSite {
   }
 
   @override
+  Future<LiveRoomStatus> getRoomStatus({required String roomId}) async {
+    try {
+      // 抖音的详情接口本身就带状态和开播时间，直接用，避免重复请求
+      var detail = await getRoomDetail(roomId: roomId);
+      return LiveRoomStatus(
+        roomId: detail.roomId,
+        isLive: detail.status,
+        startTime: detail.status ? detail.showTime : null,
+        // 未开播时时间存在 lastLiveTime（showTime 只在直播中有值）
+        lastLiveTime: detail.status ? null : detail.lastLiveTime,
+        roomNotFound: detail.roomNotFound,
+      );
+    } catch (e) {
+      CoreLog.error(e);
+      return LiveRoomStatus(roomId: roomId, isLive: false);
+    }
+  }
+
+  @override
   Future<List<LiveSuperChatMessage>> getSuperChatMessage({
     required String roomId,
   }) {
@@ -780,5 +876,109 @@ class DouyinSite implements LiveSite {
     }
     return int.tryParse(stringBuffer.toString()) ??
         Random().nextInt(1000000000);
+  }
+  /// 从 partition 对象里翻出可用的图片地址（抖音字段名不固定，做深度兜底）
+  String? _pickPartitionImageUrl(dynamic data) {
+    if (data == null) {
+      return null;
+    }
+    if (data is String) {
+      final value = data.trim();
+      return value.isEmpty ? null : value;
+    }
+    if (data is List) {
+      for (final item in data) {
+        final value = _pickPartitionImageUrl(item);
+        if (value != null && value.isNotEmpty) {
+          return value;
+        }
+      }
+      return null;
+    }
+    if (data is! Map) {
+      return null;
+    }
+
+    for (final key in const [
+      "icon",
+      "icons",
+      "cover",
+      "background",
+      "avatar_thumb",
+      "image",
+      "image_url",
+      "url",
+      "url_list",
+      "static_icon",
+    ]) {
+      final value = _pickPartitionImageUrl(data[key]);
+      if (value != null && value.isNotEmpty) {
+        return value;
+      }
+    }
+
+    for (final value in data.values) {
+      final resolved = _pickPartitionImageUrl(value);
+      if (resolved != null && resolved.isNotEmpty) {
+        return resolved;
+      }
+    }
+    return null;
+  }
+
+  /// 抖音首页是 Next.js RSC 数据流：定位 categoryData 后按括号配平取值，
+  /// 不再依赖「一条正则抠到底」那种页面一改就崩的做法
+  Map<String, dynamic> _extractCategoryRenderData(String html) {
+    const marker = r'\"categoryData\":';
+    final markerIndex = html.indexOf(marker);
+    if (markerIndex < 0) {
+      throw CoreError("抖音分类数据解析失败");
+    }
+    final arrayStart = html.indexOf("[", markerIndex);
+    if (arrayStart < 0) {
+      throw CoreError("抖音分类数据解析失败");
+    }
+    final escapedArray = _extractEscapedJsonArray(html, arrayStart);
+    final normalizedJson = '{"categoryData":$escapedArray}'
+        .replaceAll(r'\"', '"')
+        .replaceAll(r"\/", "/")
+        .replaceAll(r"\\", "\\");
+    return json.decode(normalizedJson) as Map<String, dynamic>;
+  }
+
+  String _extractEscapedJsonArray(String source, int startIndex) {
+    final buffer = StringBuffer();
+    var depth = 0;
+    var inString = false;
+    var escaped = false;
+    for (var i = startIndex; i < source.length; i++) {
+      final char = source[i];
+      buffer.write(char);
+
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char == "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char == '"') {
+        inString = !inString;
+        continue;
+      }
+      if (inString) {
+        continue;
+      }
+      if (char == "[") {
+        depth += 1;
+      } else if (char == "]") {
+        depth -= 1;
+        if (depth == 0) {
+          return buffer.toString();
+        }
+      }
+    }
+    throw CoreError("抖音分类数据解析失败");
   }
 }

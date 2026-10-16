@@ -155,6 +155,16 @@ class PlaySettingsPage extends GetView<AppSettingsController> {
                     },
                   ),
                 ),
+                AppStyle.divider,
+                Obx(
+                  () => SettingsSwitch(
+                    title: "允许发送弹幕",
+                    value: controller.playerSendDanmaku.value,
+                    onChanged: (e) {
+                      controller.setPlayerSendDanmaku(e);
+                    },
+                  ),
+                ),
               ],
             ),
           ),

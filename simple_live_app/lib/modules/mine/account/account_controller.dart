@@ -7,6 +7,8 @@ import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
+import 'package:simple_live_app/modules/mine/account/douyu/douyu_login_sheet.dart';
+import 'package:simple_live_app/services/douyu_account_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
 class AccountController extends GetxController {
@@ -79,6 +81,23 @@ class AccountController extends GetxController {
     await BiliBiliAccountService.instance.loadUserInfo();
   }
 
+  void douyuTap() async {
+    if (DouyuAccountService.instance.logined.value) {
+      var result = await Utils.showAlertDialog("确定要退出斗鱼账号吗？", title: "退出登录");
+      if (result) {
+        DouyuAccountService.instance.logout();
+        SmartDialog.showToast("已退出斗鱼账号");
+      }
+    } else {
+      douyuLogin();
+    }
+  }
+
+  /// 登录方式选择（扫码 / 手动填 Cookie），与播放页提示共用同一实现
+  void douyuLogin() {
+    showDouyuLoginSheet();
+  }
+
   void douyinTap() async {
     if (DouyinAccountService.instance.hasCookie.value) {
       var result = await Utils.showAlertDialog("确定要清除自定义 ttwid 吗？", title: "清除配置");
@@ -92,17 +111,13 @@ class AccountController extends GetxController {
   }
 
   void doDouyinCookieConfig() {
-    // 初始化文本框时，只显示 ttwid 的值部分
-    var savedCookie = DouyinAccountService.instance.cookie;
-    var displayText = savedCookie;
-    if (savedCookie.startsWith('ttwid=')) {
-      displayText = savedCookie.substring(6); // 去掉 "ttwid="
-    }
-    var controller = TextEditingController(text: displayText);
+    // 原样回填：支持粘贴完整 Cookie，也支持只填 ttwid 的值
+    var controller =
+        TextEditingController(text: DouyinAccountService.instance.cookie);
 
     Get.dialog(
       AlertDialog(
-        title: const Text("配置抖音 ttwid"),
+        title: const Text("配置抖音 Cookie"),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,

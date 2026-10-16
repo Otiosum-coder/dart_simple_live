@@ -1,7 +1,14 @@
 import 'dart:convert';
 
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
+import 'package:simple_live_app/app/event_bus.dart';
+import 'package:simple_live_app/models/db/follow_user.dart';
+import 'package:simple_live_app/models/db/follow_user_tag.dart';
+import 'package:simple_live_app/models/db/history.dart';
 import 'package:simple_live_app/app/controller/base_controller.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/utils.dart';
@@ -25,6 +32,80 @@ class SyncDeviceController extends BaseController {
       cancel: "不覆盖",
     );
     return overlay;
+  }
+
+  /// 让用户选同步方向（关注数量显示在设备页，这里只做选择）
+  void showSyncDirectionSheet() {
+    Utils.showBottomSheet(
+      title: "选择同步方向",
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.upload_outlined),
+            title: const Text("本机覆盖对方"),
+            subtitle: Text(
+                "把本机的 ${DBService.instance.getFollowList().length} 个关注推给对方"),
+            onTap: () {
+              Get.back();
+              syncFollowAndTag();
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.download_outlined),
+            title: const Text("对方覆盖本机"),
+            subtitle: Text("拉取对方的 ${info.followCount} 个关注覆盖本机"),
+            onTap: () {
+              Get.back();
+              pullFollowAndTag();
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 反向同步：拉取对方数据覆盖本机
+  void pullFollowAndTag() async {
+    try {
+      var localCount = DBService.instance.getFollowList().length;
+      var ok = await Utils.showAlertDialog(
+        "将用对方数据覆盖本机，本机现有 $localCount 个关注。确定吗？",
+        title: "对方覆盖本机",
+        confirm: "覆盖",
+        cancel: "取消",
+      );
+      if (!ok) {
+        return;
+      }
+      SmartDialog.showLoading(msg: "同步中...");
+      var data = await request.fetchExport(client);
+      if (data["status"] != true) {
+        throw data["message"] ??
+            "对方不支持反向同步（请把对方 App 也升级到新版本）";
+      }
+      await DBService.instance.followBox.clear();
+      for (var item in (data["follow"] as List? ?? const [])) {
+        var user = FollowUser.fromJson(item);
+        await DBService.instance.followBox.put(user.id, user);
+      }
+      await DBService.instance.tagBox.clear();
+      for (var item in (data["tag"] as List? ?? const [])) {
+        var tag = FollowUserTag.fromJson(item);
+        await DBService.instance.tagBox.put(tag.id, tag);
+      }
+      for (var item in (data["history"] as List? ?? const [])) {
+        var history = History.fromJson(item);
+        await DBService.instance.addOrUpdateHistory(history);
+      }
+      EventBus.instance.emit(Constant.kUpdateFollow, 0);
+      SmartDialog.showToast("已用对方数据覆盖本机");
+    } catch (e) {
+      SmartDialog.showToast("同步失败:$e");
+      Log.logPrint(e);
+    } finally {
+      SmartDialog.dismiss();
+    }
   }
 
   void syncFollowAndTag() async {

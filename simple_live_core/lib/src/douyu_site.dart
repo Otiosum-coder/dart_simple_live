@@ -2,7 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:simple_live_core/src/common/core_error.dart';
+import 'package:simple_live_core/src/common/core_log.dart';
 import 'package:simple_live_core/src/common/http_client.dart';
+import 'package:simple_live_core/src/common/live_duration.dart';
 import 'package:simple_live_core/src/danmaku/douyu_danmaku.dart';
 import 'package:simple_live_core/src/interface/live_danmaku.dart';
 import 'package:simple_live_core/src/interface/live_site.dart';
@@ -13,6 +16,7 @@ import 'package:simple_live_core/src/model/live_play_url.dart';
 import 'package:simple_live_core/src/model/live_room_item.dart';
 import 'package:simple_live_core/src/model/live_search_result.dart';
 import 'package:simple_live_core/src/model/live_room_detail.dart';
+import 'package:simple_live_core/src/model/live_room_status.dart';
 import 'package:simple_live_core/src/model/live_play_quality.dart';
 import 'package:simple_live_core/src/model/live_category_result.dart';
 import 'package:html_unescape/html_unescape.dart';
@@ -28,11 +32,62 @@ class DouyuSite implements LiveSite {
   @override
   LiveDanmaku getDanmaku() => DouyuDanmaku();
 
+  /// cookie 里的中文/URL 编码字段
+  String _decodeCookieValue(String value) {
+    try {
+      return Uri.decodeComponent(value);
+    } catch (e) {
+      return value;
+    }
+  }
+
+  /// 从登录 cookie 里取一个字段
+  String _cookieValue(String key) {
+    for (var part in cookie.split(';')) {
+      var index = part.indexOf('=');
+      if (index > 0 && part.substring(0, index).trim() == key) {
+        return part.substring(index + 1).trim();
+      }
+    }
+    return "";
+  }
+
+  /// 斗鱼 2026-09-21 起对未登录用户限制最高画质：原画 / 蓝光4M 只能看 10 分钟。
+  /// 登录态必须透传到各接口，尤其是 getH5Play —— 服务端按登录态决定下发的清晰度与 token。
+  static const String kUserAgent =
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.43";
+
+  /// 用户登录后的 Cookie，为空表示未登录
+  String cookie = "";
+
+  /// 是否已登录
+  bool get isLoggedIn => cookie.isNotEmpty;
+
+  /// 统一构造请求头，登录后自动带上 Cookie
+  ///
+  /// [referer] 不传时使用斗鱼首页；[extraCookie] 用于附加接口自身需要的设备标识
+  /// （例如搜索接口的 dy_did/acf_did）。
+  Map<String, String> requestHeaders({String? referer, String? extraCookie}) {
+    var headers = <String, String>{
+      'referer': referer ?? 'https://www.douyu.com/',
+      'user-agent': kUserAgent,
+    };
+    var cookies = <String>[
+      if (extraCookie != null && extraCookie.isNotEmpty) extraCookie,
+      if (cookie.isNotEmpty) cookie,
+    ];
+    if (cookies.isNotEmpty) {
+      headers['cookie'] = cookies.join(';');
+    }
+    return headers;
+  }
+
   @override
   Future<List<LiveCategory>> getCategores() async {
     List<LiveCategory> categories = [];
     var result = await HttpClient.instance.getJson(
       "https://m.douyu.com/api/cate/list",
+      header: requestHeaders(referer: "https://m.douyu.com/"),
     );
     var subCateList = result["data"]["cate2Info"] as List;
     for (var item in result["data"]["cate1Info"]) {
@@ -71,6 +126,7 @@ class DouyuSite implements LiveSite {
     var result = await HttpClient.instance.getJson(
       "https://www.douyu.com/gapi/rkc/directory/mixList/2_${category.id}/$page",
       queryParameters: {},
+      header: requestHeaders(),
     );
 
     var items = <LiveRoomItem>[];
@@ -101,6 +157,7 @@ class DouyuSite implements LiveSite {
     var result = await HttpClient.instance.postJson(
       "https://www.douyu.com/lapi/live/getH5Play/${detail.roomId}",
       data: data,
+      header: requestHeaders(referer: "https://www.douyu.com/${detail.roomId}"),
       formUrlEncoded: true,
     );
 
@@ -145,7 +202,20 @@ class DouyuSite implements LiveSite {
         urls.add(url);
       }
     }
-    return LivePlayUrl(urls: urls);
+    // 追加一条「音频线路」：斗鱼 CDN 支持 &only-audio=1，只下发音频
+    // （实测 4 秒下载量 2749KB → 63KB，约 5.5Mbps → 126kbps）
+    int? audioLineIndex;
+    if (urls.isNotEmpty) {
+      urls.add("${urls.first}&only-audio=1");
+      audioLineIndex = urls.length - 1;
+    }
+
+    // 拉流请求同样要带登录态：未登录时 CDN 会在 10 分钟后掐断原画/蓝光
+    return LivePlayUrl(
+      urls: urls,
+      headers: requestHeaders(referer: "https://www.douyu.com/${detail.roomId}"),
+      audioLineIndex: audioLineIndex,
+    );
   }
 
   Future<String> getPlayUrl(
@@ -158,11 +228,7 @@ class DouyuSite implements LiveSite {
     var result = await HttpClient.instance.postJson(
       "https://www.douyu.com/lapi/live/getH5Play/$roomId",
       data: args,
-      header: {
-        'referer': 'https://www.douyu.com/$roomId',
-        'user-agent':
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.43",
-      },
+      header: requestHeaders(referer: 'https://www.douyu.com/$roomId'),
       formUrlEncoded: true,
     );
 
@@ -174,6 +240,7 @@ class DouyuSite implements LiveSite {
     var result = await HttpClient.instance.getJson(
       "https://www.douyu.com/japi/weblist/apinc/allpage/6/$page",
       queryParameters: {},
+      header: requestHeaders(),
     );
 
     var items = <LiveRoomItem>[];
@@ -196,47 +263,43 @@ class DouyuSite implements LiveSite {
 
   @override
   Future<LiveRoomDetail> getRoomDetail({required String roomId}) async {
-    Map roomInfo = await _getRoomInfo(roomId);
+    Map roomInfo;
+    try {
+      roomInfo = await _getRoomInfo(roomId);
+    } catch (e) {
+      // 房间不存在：返回空详情，界面显示「该直播间已失效或不存在」
+      if (e is CoreError && e.statusCode == 404) {
+        return LiveRoomDetail(
+          roomId: roomId,
+          title: "",
+          cover: "",
+          userName: "",
+          userAvatar: "",
+          online: 0,
+          status: false,
+          url: "https://www.douyu.com/$roomId",
+          roomNotFound: true,
+        );
+      }
+      rethrow;
+    }
 
     Map h5RoomInfo = await HttpClient.instance.getJson(
       "https://www.douyu.com/swf_api/h5room/$roomId",
       queryParameters: {},
-      header: {
-        'referer': 'https://www.douyu.com/$roomId',
-        'user-agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.43',
-      },
+      header: requestHeaders(referer: 'https://www.douyu.com/$roomId'),
     );
-    String? showTime = h5RoomInfo["data"]?["show_time"]?.toString();
+    String? showTime = LiveDuration.parse(h5RoomInfo["data"]?["show_time"]);
+    LiveDuration.log("斗鱼", roomId, showTime);
 
     var jsEncResult = await HttpClient.instance.getText(
       "https://www.douyu.com/swf_api/homeH5Enc?rids=$roomId",
       queryParameters: {},
-      header: {
-        'referer': 'https://www.douyu.com/$roomId',
-        'user-agent':
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.43",
-      },
+      header: requestHeaders(referer: 'https://www.douyu.com/$roomId'),
     );
     var crptext = json.decode(jsEncResult)["data"]["room$roomId"].toString();
 
-    if (showTime != null && showTime.isNotEmpty) {
-      try {
-        int startTimeStamp = int.parse(showTime);
-        int currentTimeStamp = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-        int durationInSeconds = currentTimeStamp - startTimeStamp;
-
-        int hours = durationInSeconds ~/ 3600;
-        int minutes = (durationInSeconds % 3600) ~/ 60;
-        int seconds = durationInSeconds % 60;
-
-        String formattedDuration =
-            '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
-        print('斗鱼直播间 $roomId 开播时长: $formattedDuration');
-      } catch (e) {
-        print('计算开播时长出错: $e');
-      }
-    }
+    var isLive = roomInfo["show_status"] == 1 && roomInfo["videoLoop"] != 1;
 
     return LiveRoomDetail(
       cover: roomInfo["room_pic"].toString(),
@@ -247,12 +310,21 @@ class DouyuSite implements LiveSite {
       userAvatar: roomInfo["owner_avatar"].toString(),
       introduction: roomInfo["show_details"].toString(),
       notice: "",
-      status: roomInfo["show_status"] == 1 && roomInfo["videoLoop"] != 1,
-      danmakuData: roomInfo["room_id"].toString(),
+      status: isLive,
+      // 发言需要 uid（+devid）：斗鱼靠它们识别身份，从登录 cookie 里取
+      danmakuData: DouyuDanmakuArgs(
+        roomId: roomInfo["room_id"].toString(),
+        uid: _cookieValue("acf_uid"),
+        devid: _cookieValue("acf_devid"),
+        nickname: _decodeCookieValue(_cookieValue("acf_nickname")),
+        avatar: _decodeCookieValue(_cookieValue("acf_avatar")),
+        username: _cookieValue("acf_username"),
+      ),
       data: DouyuSign.getSign(crptext, roomInfo["room_id"].toString()),
       url: "https://www.douyu.com/$roomId",
       isRecord: roomInfo["videoLoop"] == 1,
-      showTime: showTime,
+      showTime: isLive ? showTime : null,
+      lastLiveTime: isLive ? null : showTime,
     );
   }
 
@@ -265,12 +337,10 @@ class DouyuSite implements LiveSite {
     var result = await HttpClient.instance.getJson(
       "https://www.douyu.com/japi/search/api/searchShow",
       queryParameters: {"kw": keyword, "page": page, "pageSize": 20},
-      header: {
-        'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.51',
-        'referer': 'https://www.douyu.com/search/',
-        'Cookie': 'dy_did=$did;acf_did=$did',
-      },
+      header: requestHeaders(
+        referer: 'https://www.douyu.com/search/',
+        extraCookie: 'dy_did=$did;acf_did=$did',
+      ),
     );
     if (result['error'] != 0) {
       throw Exception(result['msg']);
@@ -294,19 +364,18 @@ class DouyuSite implements LiveSite {
     var result = await HttpClient.instance.getJson(
       "https://www.douyu.com/betard/$roomId",
       queryParameters: {},
-      header: {
-        'referer': 'https://www.douyu.com/$roomId',
-        'user-agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.43',
-      },
+      header: requestHeaders(referer: 'https://www.douyu.com/$roomId'),
     );
-    Map roomInfo;
-    if (result is String) {
-      roomInfo = json.decode(result)["room"];
-    } else {
-      roomInfo = result["room"];
+    try {
+      // betard 的 content-type 是 text/html，getJson 会原样返回字符串
+      if (result is String) {
+        return json.decode(result)["room"];
+      }
+      return result["room"];
+    } on FormatException {
+      // 房间不存在时斗鱼返回的是 HTML 错误页，解析必然失败
+      throw CoreError("房间不存在", statusCode: 404);
     }
-    return roomInfo;
   }
 
   //生成指定长度的16进制随机字符串
@@ -334,12 +403,10 @@ class DouyuSite implements LiveSite {
         "pageSize": 20,
         "filterType": 1,
       },
-      header: {
-        'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.51',
-        'referer': 'https://www.douyu.com/search/',
-        'Cookie': 'dy_did=$did;acf_did=$did',
-      },
+      header: requestHeaders(
+        referer: 'https://www.douyu.com/search/',
+        extraCookie: 'dy_did=$did;acf_did=$did',
+      ),
     );
 
     var items = <LiveAnchorItem>[];
@@ -358,6 +425,30 @@ class DouyuSite implements LiveSite {
     }
     var hasMore = result["data"]["relateUser"].isNotEmpty;
     return LiveSearchAnchorResult(hasMore: hasMore, items: items);
+  }
+
+  @override
+  Future<LiveRoomStatus> getRoomStatus({required String roomId}) async {
+    try {
+      // betard 一次就能拿到直播状态 + 开播时间（未开播时 show_time 是上一场的）
+      var roomInfo = await _getRoomInfo(roomId);
+      var isLive = roomInfo["show_status"] == 1 && roomInfo["videoLoop"] != 1;
+      var showTime = LiveDuration.parse(roomInfo["show_time"]);
+      return LiveRoomStatus(
+        roomId: roomInfo["room_id"]?.toString() ?? roomId,
+        isLive: isLive,
+        startTime: isLive ? showTime : null,
+        lastLiveTime: isLive ? null : showTime,
+      );
+    } catch (e) {
+      CoreLog.error(e);
+      // 404 = 房间不存在（斗鱼返回的是 HTML 错误页）
+      return LiveRoomStatus(
+        roomId: roomId,
+        isLive: false,
+        roomNotFound: e is CoreError && e.statusCode == 404,
+      );
+    }
   }
 
   @override

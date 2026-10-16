@@ -1,0 +1,138 @@
+name: build-manual
+
+# 手动触发的打包流水线：只产出 EXE(Windows) / APK(Android) 到 Artifacts，不创建 Release。
+# 打正式版（带 Release、含 mac/iOS/Linux）请继续用 publish_app_release.yml（推送 v* tag 触发）。
+on:
+  workflow_dispatch:
+    inputs:
+      build_apk:
+        description: "构建 Android APK"
+        type: boolean
+        default: true
+      build_windows:
+        description: "构建 Windows (EXE)"
+        type: boolean
+        default: true
+
+jobs:
+  # ---------------------------------------------------------------- Android APK
+  build-apk:
+    if: ${{ inputs.build_apk }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 读取版本号
+        id: version
+        shell: bash
+        run: |
+          V=$(grep -m1 '^version:' simple_live_app/pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
+          echo "VERSION=${V:-dev}" >> "$GITHUB_OUTPUT"
+          echo "本次版本：${V:-dev}"
+
+      # 签名密钥（可选）：配置了 KEYSTORE_BASE64 等 secrets 才启用，否则构建出的是 debug 签名包
+      # 注意：step 的 if 里不能可靠地引用 secrets，所以这里统一走 env + bash 判断
+      - name: 还原签名密钥
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::未配置 KEYSTORE_BASE64/STORE_PASSWORD/KEY_PASSWORD/KEY_ALIAS，本次 APK 会用 debug 签名，无法覆盖安装已发布的正式包"
+            exit 0
+          fi
+          # storeFile 必须是绝对路径：build.gradle.kts 里用 file(it) 解析，相对的是 android/app 目录
+          echo "$KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/simple_live_app/android/app/keystore.jks"
+          cat > "$GITHUB_WORKSPACE/simple_live_app/android/key.properties" <<EOF
+          storeFile=$GITHUB_WORKSPACE/simple_live_app/android/app/keystore.jks
+          storePassword=$STORE_PASSWORD
+          keyPassword=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
+          EOF
+          echo "已写入签名配置（alias=$KEY_ALIAS）"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "17"
+          cache: gradle
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.38.x"
+          cache: true
+
+      - name: 拉依赖
+        run: |
+          cd simple_live_app
+          flutter pub get
+
+      - name: 构建 APK
+        run: |
+          cd simple_live_app
+          flutter build apk --release --split-per-abi
+
+      - name: 上传 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ steps.version.outputs.VERSION }}
+          path: |
+            simple_live_app/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+            simple_live_app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            simple_live_app/build/app/outputs/flutter-apk/app-x86_64-release.apk
+          if-no-files-found: error
+
+  # ------------------------------------------------------------- Windows EXE
+  build-windows:
+    if: ${{ inputs.build_windows }}
+    runs-on: windows-latest
+    env:
+      # 插件源码里有中文注释，非 UTF-8 代码页下 /WX 会把 C4819 升级成 C2220 编译失败
+      CL: /utf-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 读取版本号
+        id: version
+        shell: bash
+        run: |
+          V=$(grep -m1 '^version:' simple_live_app/pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
+          echo "VERSION=${V:-dev}" >> "$GITHUB_OUTPUT"
+          echo "本次版本：${V:-dev}"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.38.x"
+          cache: true
+
+      - name: 打开 Windows 桌面支持
+        run: flutter config --enable-windows-desktop
+
+      - name: 拉依赖
+        run: |
+          cd simple_live_app
+          flutter pub get
+
+      - name: 构建 Windows Release
+        run: |
+          cd simple_live_app
+          flutter build windows --release
+
+      - name: 打包为 zip（exe + 全部依赖 DLL，解压即用）
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.version.outputs.VERSION }}"
+          $src = "simple_live_app/build/windows/x64/runner/Release"
+          if (-not (Test-Path $src)) { throw "构建产物不存在：$src" }
+          $zip = "SimpleLive-$ver-windows-x64.zip"
+          Compress-Archive -Path "$src/*" -DestinationPath $zip -Force
+          Get-Item $zip | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
+
+      - name: 上传 EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe-${{ steps.version.outputs.VERSION }}
+          path: SimpleLive-*-windows-x64.zip
+          if-no-files-found: error

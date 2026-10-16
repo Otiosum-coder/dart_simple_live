@@ -114,6 +114,8 @@ class SyncService extends GetxService {
       "type": Platform.operatingSystem,
       //'version': Utils.packageInfo.version,
       "name": name,
+      // 带上关注数量，方便用户在同步时判断该用哪边的数据
+      "followCount": DBService.instance.getFollowList().length,
       //"address": ip,
       //"port": httpPort,
     };
@@ -192,6 +194,8 @@ class SyncService extends GetxService {
       var serverRouter = Router();
       serverRouter.get('/', _helloRequest);
       serverRouter.get('/info', _infoRequest);
+      // 反向同步：对方来拉取本机数据
+      serverRouter.get('/sync/export', _exportRequest);
       serverRouter.post('/sync/follow', _syncFollowUserReuqest);
       serverRouter.post('/sync/tag', _syncFollowUserTagRequest);
       serverRouter.post('/sync/history', _syncHistoryReuqest);
@@ -239,7 +243,28 @@ class SyncService extends GetxService {
       'version': Utils.packageInfo.version,
       'address': ipAddress.value,
       'port': httpPort,
+      // 本机关注数量：对面显示出来，方便判断该用哪边的数据覆盖
+      'followCount': DBService.instance.getFollowList().length,
     });
+  }
+
+  /// 导出本机数据（反向同步用：对方拉取后覆盖它自己）
+  shelf.Response _exportRequest(shelf.Request request) {
+    try {
+      return toJsonResponse({
+        'status': true,
+        'follow':
+            DBService.instance.getFollowList().map((e) => e.toJson()).toList(),
+        'tag': DBService.instance
+            .getFollowTagList()
+            .map((e) => e.toJson())
+            .toList(),
+        'history':
+            DBService.instance.getHistores().map((e) => e.toJson()).toList(),
+      });
+    } catch (e) {
+      return toJsonResponse({'status': false, 'message': e.toString()});
+    }
   }
 
   /// 同步关注用户列表

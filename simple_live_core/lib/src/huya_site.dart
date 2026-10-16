@@ -347,8 +347,11 @@ class HuyaSite implements LiveSite {
   @override
   Future<LiveRoomDetail> getRoomDetail({required String roomId}) async {
     var roomInfo = await _getRoomInfo(roomId);
-    var tLiveInfo = roomInfo["roomInfo"]["tLiveInfo"];
-    var tProfileInfo = roomInfo["roomInfo"]["tProfileInfo"];
+    // 失效/异常房间的 roomInfo 可能为空，这里兜底避免崩溃
+    var roomData = roomInfo["roomInfo"];
+    var tLiveInfo = (roomData is Map ? roomData["tLiveInfo"] : null) ?? const {};
+    var tProfileInfo =
+        (roomData is Map ? roomData["tProfileInfo"] : null) ?? const {};
 
     var title = tLiveInfo["sIntroduction"]?.toString() ?? "";
     if (title.isEmpty) {
@@ -357,8 +360,10 @@ class HuyaSite implements LiveSite {
     var huyaLines = <HuyaLineModel>[];
     var huyaBiterates = <HuyaBitRateModel>[];
     //读取可用线路
-    var lines = tLiveInfo["tLiveStreamInfo"]["vStreamInfo"]["value"];
-    for (var item in lines) {
+    var streamInfo = tLiveInfo["tLiveStreamInfo"];
+    var vStreamInfo = streamInfo is Map ? streamInfo["vStreamInfo"] : null;
+    var streamValue = vStreamInfo is Map ? vStreamInfo["value"] : null;
+    for (var item in (streamValue is List ? streamValue : const [])) {
       if ((item["sFlvUrl"]?.toString() ?? "").isNotEmpty) {
         huyaLines.add(HuyaLineModel(
           line: item["sFlvUrl"].toString(),
@@ -373,8 +378,9 @@ class HuyaSite implements LiveSite {
     }
 
     //清晰度
-    var biterates = tLiveInfo["tLiveStreamInfo"]["vBitRateInfo"]["value"];
-    for (var item in biterates) {
+    var vBitRateInfo = streamInfo is Map ? streamInfo["vBitRateInfo"] : null;
+    var bitRateValue = vBitRateInfo is Map ? vBitRateInfo["value"] : null;
+    for (var item in (bitRateValue is List ? bitRateValue : const [])) {
       var name = item["sDisplayName"].toString();
       if (name.contains("HDR")) {
         continue;
@@ -388,19 +394,52 @@ class HuyaSite implements LiveSite {
     var topSid = roomInfo["topSid"];
     var subSid = roomInfo["subSid"];
 
+    // 标准房间号，部分入口传进来的是房间别名，mp 接口需要用这个 id；
+    // 离线房间的 lProfileRoom 可能是 0 或空，此时用传进来的房间号
+    var profileRoomId = tLiveInfo["lProfileRoom"]?.toString() ?? "";
+    if (profileRoomId.isEmpty || profileRoomId == "0") {
+      profileRoomId = roomId;
+    }
+    // 房间状态，异常房间的 roomInfo 可能为空，这里做空值保护
+    var isLive = roomData is Map && roomData["eLiveStatus"] == 2;
+    // 页面里没有 roomInfo = 房间不存在（旧房间号/主播已注销）
+    var roomNotFound = roomData is! Map;
+
+    // 开播时间（秒级时间戳）：直播中为本场开播时间，未开播时为上一次开播时间
+    var showTime = await _getLiveStartTime(profileRoomId);
+    if (showTime == null && profileRoomId != roomId) {
+      // 用别名查不到时，用标准房间号再试一次
+      showTime = await _getLiveStartTime(roomId);
+    }
+    if (isLive) {
+      LiveDuration.log("虎牙", profileRoomId, showTime);
+    }
+
+    // 直播地址（失效房间没有 liveLineUrl）
+    var roomProfile = roomInfo["roomProfile"];
+    var liveLineUrl =
+        roomProfile is Map ? roomProfile["liveLineUrl"]?.toString() : null;
+    var playUrl = "";
+    if (liveLineUrl != null && liveLineUrl.isNotEmpty) {
+      try {
+        playUrl = "https:" + utf8.decode(base64.decode(liveLineUrl));
+      } catch (e) {
+        CoreLog.error(e);
+      }
+    }
+
     return LiveRoomDetail(
-      cover: tLiveInfo["sScreenshot"].toString(),
-      online: tLiveInfo["lTotalCount"],
-      roomId: tLiveInfo["lProfileRoom"].toString(),
+      cover: tLiveInfo["sScreenshot"]?.toString() ?? "",
+      online: tLiveInfo["lTotalCount"] ?? 0,
+      roomId: profileRoomId,
       title: title,
-      userName: tProfileInfo["sNick"].toString(),
-      userAvatar: tProfileInfo["sAvatar180"].toString(),
-      introduction: tLiveInfo["sIntroduction"].toString(),
-      notice: roomInfo["welcomeText"].toString(),
-      status: roomInfo["roomInfo"]["eLiveStatus"] == 2,
+      userName: tProfileInfo["sNick"]?.toString() ?? "",
+      userAvatar: tProfileInfo["sAvatar180"]?.toString() ?? "",
+      introduction: tLiveInfo["sIntroduction"]?.toString() ?? "",
+      notice: roomInfo["welcomeText"]?.toString() ?? "",
+      status: isLive,
       data: HuyaUrlDataModel(
-        url:
-            "https:${utf8.decode(base64.decode(roomInfo["roomProfile"]["liveLineUrl"].toString()))}",
+        url: playUrl,
         lines: huyaLines,
         bitRates: huyaBiterates,
         uid: getUid(t: 13, e: 10),
@@ -411,6 +450,9 @@ class HuyaSite implements LiveSite {
         subSid: subSid ?? 0,
       ),
       url: "https://www.huya.com/$roomId",
+      showTime: isLive ? showTime : null,
+      lastLiveTime: isLive ? null : showTime,
+      roomNotFound: roomNotFound,
     );
   }
 
@@ -444,6 +486,112 @@ class HuyaSite implements LiveSite {
     jsonObj["topSid"] = topSid;
     jsonObj["subSid"] = subSid;
     return jsonObj;
+  }
+
+  /// 通过 mp 接口一次拿到直播状态与开播时间
+  ///
+  /// 接口：https://mp.huya.com/cache.php?m=Live&do=profileRoom&roomid=xxx
+  /// 注意 status 在响应的顶层，数据在 data（liveStatus + liveData.startTime）
+  Future<Map<String, dynamic>?> _getMpLiveInfo(String roomId) async {
+    try {
+      var res = await HttpClient.instance.getJson(
+        "https://mp.huya.com/cache.php",
+        queryParameters: {
+          "m": "Live",
+          "do": "profileRoom",
+          "roomid": roomId,
+        },
+        header: {
+          "user-agent": kUserAgent,
+          "referer": "https://m.huya.com/$roomId",
+        },
+      );
+      // 该接口的 Content-Type 不是 application/json，Dio 会原样返回字符串
+      var result = res is String ? json.decode(res) : res;
+
+      if (result["status"] != 200) {
+        CoreLog.d('虎牙房间信息获取失败 [$roomId]: ${result["status"]} ${result["message"]}');
+        // 422 = 该主播不存在（旧房间号/已注销），用于区分「未开播」和「已失效」
+        if (result["status"] == 422) {
+          return {"notFound": true};
+        }
+        return null;
+      }
+
+      var data = result["data"];
+      if (data is! Map) {
+        return null;
+      }
+
+      // 直播状态为 "ON"/"OFF"，个别情况下可能是布尔值
+      var liveStatus = data["liveStatus"];
+      return {
+        "isLive": liveStatus == "ON" || liveStatus == true,
+        "startTime": LiveDuration.parse(data["liveData"]?["startTime"]),
+      };
+    } catch (e) {
+      CoreLog.error(e);
+      return null;
+    }
+  }
+
+  /// 获取虎牙直播间开播时间（秒级时间戳字符串），获取失败返回 null
+  Future<String?> _getLiveStartTime(String roomId) async {
+    var info = await _getMpLiveInfo(roomId);
+    return info?["startTime"] as String?;
+  }
+
+  /// 用 m 站页面解析标准房间号
+  ///
+  /// 返回 null 表示无法判断（网络/解析失败），返回空串表示确认房间不存在
+  Future<String?> _resolveProfileRoomId(String roomId) async {
+    try {
+      var roomInfo = await _getRoomInfo(roomId);
+      var roomData = roomInfo["roomInfo"];
+      if (roomData is! Map) {
+        return "";
+      }
+      var pid = roomData["tLiveInfo"]?["lProfileRoom"]?.toString() ?? "";
+      if (pid.isEmpty || pid == "0" || pid == roomId) {
+        return "";
+      }
+      return pid;
+    } catch (e) {
+      CoreLog.error(e);
+      return null;
+    }
+  }
+
+  @override
+  Future<LiveRoomStatus> getRoomStatus({required String roomId}) async {
+    var info = await _getMpLiveInfo(roomId);
+    if (info != null && info["notFound"] == true) {
+      // mp 不认识这个号：可能是别名/旧号，用页面解析出标准房间号再试
+      var resolved = await _resolveProfileRoomId(roomId);
+      if (resolved == null) {
+        // 判断不了，按普通流程走
+        return defaultGetRoomStatus(this, roomId: roomId);
+      }
+      if (resolved.isEmpty) {
+        return LiveRoomStatus(roomId: roomId, isLive: false, roomNotFound: true);
+      }
+      info = await _getMpLiveInfo(resolved);
+    }
+    if (info == null) {
+      // mp 接口拿不到时回落到「查页面状态 + 详情」
+      return defaultGetRoomStatus(this, roomId: roomId);
+    }
+    if (info["notFound"] == true) {
+      return LiveRoomStatus(roomId: roomId, isLive: false, roomNotFound: true);
+    }
+    var isLive = info["isLive"] == true;
+    var startTime = info["startTime"] as String?;
+    return LiveRoomStatus(
+      roomId: roomId,
+      isLive: isLive,
+      startTime: isLive ? startTime : null,
+      lastLiveTime: isLive ? null : startTime,
+    );
   }
 
   @override
@@ -524,7 +672,7 @@ class HuyaSite implements LiveSite {
   @override
   Future<bool> getLiveStatus({required String roomId}) async {
     var roomInfo = await _getRoomInfo(roomId);
-    return roomInfo["roomInfo"]["eLiveStatus"] == 2;
+    return roomInfo["roomInfo"]?["eLiveStatus"] == 2;
   }
 
   /// 匿名登录获取uid

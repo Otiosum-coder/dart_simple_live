@@ -7,11 +7,19 @@ class NetImage extends StatelessWidget {
   final double? height;
   final BoxFit? fit;
   final double borderRadius;
+
+  /// 图片加载失败时显示的兜底组件（不传则显示破图图标）
+  final Widget? failedWidget;
+
+  /// 附加请求头（部分平台封面/分类图需要 Referer、UA）
+  final Map<String, String>? headers;
   const NetImage(this.picUrl,
       {this.width,
       this.height,
       this.fit = BoxFit.cover,
       this.borderRadius = 0,
+      this.failedWidget,
+      this.headers,
       Key? key})
       : super(key: key);
 
@@ -28,6 +36,18 @@ class NetImage extends StatelessWidget {
     if (pic.startsWith("//")) {
       pic = 'https:$pic';
     }
+    // asset:// 前缀 = 本地表情图（抖音表情包等）
+    if (pic.startsWith("asset://")) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(borderRadius),
+        child: Image.asset(
+          pic.substring("asset://".length),
+          fit: fit,
+          height: height,
+          width: width,
+        ),
+      );
+    }
     return ClipRRect(
       borderRadius: BorderRadius.circular(borderRadius),
       child: ExtendedImage.network(
@@ -35,6 +55,7 @@ class NetImage extends StatelessWidget {
         fit: fit,
         height: height,
         width: width,
+        headers: headers,
         shape: BoxShape.rectangle,
         borderRadius: BorderRadius.circular(borderRadius),
         loadStateChanged: (e) {
@@ -46,11 +67,12 @@ class NetImage extends StatelessWidget {
             );
           }
           if (e.extendedImageLoadState == LoadState.failed) {
-            return const Icon(
-              Icons.broken_image,
-              color: Colors.grey,
-              size: 24,
-            );
+            return failedWidget ??
+                const Icon(
+                  Icons.broken_image,
+                  color: Colors.grey,
+                  size: 24,
+                );
           }
           return null;
         },

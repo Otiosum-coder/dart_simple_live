@@ -5,6 +5,8 @@ import '../model/live_category_result.dart';
 import '../model/live_message.dart';
 import '../model/live_play_url.dart';
 import '../model/live_room_detail.dart';
+import '../model/live_room_status.dart';
+import '../common/core_log.dart';
 import '../model/live_search_result.dart';
 
 import '../model/live_category.dart';
@@ -82,9 +84,46 @@ class LiveSite {
     return Future.value(false);
   }
 
+  /// 查询房间状态（一次拿全：是否直播 + 本场开播时间 / 上次直播时间）
+  ///
+  /// 默认实现见 [defaultGetRoomStatus]，各平台应按「请求最少」的方式覆写：
+  /// - 斗鱼：betard 一次拿到状态 + show_time
+  /// - 抖音：详情接口本身就带状态和时间（避免重复请求）
+  /// - 虎牙：mp 接口一次拿到 liveStatus + startTime
+  /// - B站：登录后用关注列表批量接口拿 record_live_time
+  Future<LiveRoomStatus> getRoomStatus({required String roomId}) {
+    return defaultGetRoomStatus(this, roomId: roomId);
+  }
+
   /// 读取指定房间的SC
   Future<List<LiveSuperChatMessage>> getSuperChatMessage(
       {required String roomId}) {
     return Future.value([]);
   }
+}
+
+/// [LiveSite.getRoomStatus] 的默认实现：查状态，直播中再查详情
+///
+/// 未开播时拿不到「上次直播时间」，需要平台自己覆写。
+Future<LiveRoomStatus> defaultGetRoomStatus(
+  LiveSite site, {
+  required String roomId,
+}) async {
+  var isLive = await site.getLiveStatus(roomId: roomId);
+  var standardRoomId = roomId;
+  String? showTime;
+  if (isLive) {
+    try {
+      var detail = await site.getRoomDetail(roomId: roomId);
+      standardRoomId = detail.roomId;
+      showTime = detail.showTime;
+    } catch (e) {
+      CoreLog.error(e);
+    }
+  }
+  return LiveRoomStatus(
+    roomId: standardRoomId,
+    isLive: isLive,
+    startTime: isLive ? showTime : null,
+  );
 }

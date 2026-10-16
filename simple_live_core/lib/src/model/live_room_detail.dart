@@ -40,8 +40,14 @@ class LiveRoomDetail {
   /// 链接
   final String url;
 
-  /// 显示时间
+  /// 开播时间（秒级时间戳字符串），直播中由各平台填充
   final String? showTime;
+
+  /// 上次直播时间（秒级时间戳字符串），未开播时由各平台填充
+  final String? lastLiveTime;
+
+  /// 房间已失效/不存在（旧房间号、主播已注销等）
+  final bool roomNotFound;
 
   LiveRoomDetail({
     required this.roomId,
@@ -58,6 +64,8 @@ class LiveRoomDetail {
     required this.url,
     this.isRecord = false,
     this.showTime,
+    this.lastLiveTime,
+    this.roomNotFound = false,
   });
 
   @override
@@ -77,6 +85,7 @@ class LiveRoomDetail {
       "url": url,
       "isRecord": isRecord,
       "showTime": showTime,
+      "lastLiveTime": lastLiveTime,
     });
   }
 }

@@ -1,7 +1,9 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:floating/floating.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:lottie/lottie.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -13,7 +15,11 @@ import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
 import 'package:simple_live_app/modules/live_room/player/player_controls.dart';
+import 'package:simple_live_app/routes/app_navigation.dart';
+import 'package:simple_live_app/services/background_playback.dart';
+import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/follow_service.dart';
+import 'package:simple_live_app/widgets/danmaku_input_bar.dart';
 import 'package:simple_live_app/widgets/desktop_refresh_button.dart';
 import 'package:simple_live_app/widgets/follow_user_item.dart';
 import 'package:simple_live_app/widgets/keep_alive_wrapper.dart';
@@ -93,7 +99,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
               controller.exitFull();
             },
             child: Scaffold(
-              body: buildMediaPlayer(),
+              body: buildMediaPlayer(context),
             ),
           );
         } else {
@@ -107,7 +113,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
     return PiPSwitcher(
       floating: controller.pip,
       childWhenDisabled: page,
-      childWhenEnabled: buildMediaPlayer(),
+      childWhenEnabled: buildMediaPlayer(context),
     );
   }
 
@@ -134,7 +140,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
       children: [
         AspectRatio(
           aspectRatio: 16 / 9,
-          child: buildMediaPlayer(),
+          child: buildMediaPlayer(context),
         ),
         buildUserProfile(context),
         buildMessageArea(),
@@ -150,10 +156,13 @@ class LiveRoomPage extends GetView<LiveRoomController> {
           child: Row(
             children: [
               Expanded(
-                child: buildMediaPlayer(),
+                child: buildMediaPlayer(context),
               ),
               SizedBox(
-                width: 300,
+                // 面板宽度自适应：桌面端仍是 300；移动端按屏宽比例算并限制在 200-300，
+                // 否则手机横屏（逻辑宽约 700）时 300 会占掉 43%，SC 卡片看起来过长
+                width: (MediaQuery.sizeOf(context).width * 0.36)
+                    .clamp(200.0, 300.0),
                 child: Column(
                   children: [
                     buildUserProfile(context),
@@ -238,7 +247,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
     );
   }
 
-  Widget buildMediaPlayer() {
+  Widget buildMediaPlayer(BuildContext context) {
     var boxFit = BoxFit.contain;
     double? aspectRatio;
     if (AppSettingsController.instance.scaleMode.value == 0) {
@@ -271,18 +280,216 @@ class LiveRoomPage extends GetView<LiveRoomController> {
           // 自己实现
           wakelock: false,
         ),
+        // 拿不到播放地址时（未开播 / 大航海等付费限定房间）显示兜底封面，
+        // 否则这里只剩一片黑，用户只看到几行文字
         Obx(
           () => Visibility(
-            visible: !controller.liveStatus.value,
-            child: const Center(
-              child: Text(
-                "未开播",
-                style: TextStyle(fontSize: 16, color: Colors.white),
-              ),
+            // 只在「取流流程结束且确实没地址」时显示，避免进房加载时闪一下
+            visible: controller.playUrlEmpty.value &&
+                controller.detail.value != null &&
+                !controller.loadError.value,
+            child: Image.asset(
+              'assets/images/cover_fallback.png',
+              fit: BoxFit.cover,
             ),
           ),
         ),
+        // 下播/断开后先盖一层不透明底：否则会同时看到「冻结的最后一帧」和未开播卡片
+        Obx(
+          () => Visibility(
+            // 必须加上「没在播放」：否则切线路失败被误判成未开播时，
+            // 卡片会压在正常播放的画面上（用户看到的就是这个）
+            visible: !controller.liveStatus.value &&
+                !controller.playerPlaying.value &&
+                controller.detail.value != null &&
+                !controller.loadError.value,
+            child: const ColoredBox(color: Colors.black),
+          ),
+        ),
+        // 只有拿到详情后才显示未开播卡片；
+        // 否则加载过程中会先闪一个「平台图标 + 暂无开播记录」的空壳
+        Obx(
+          () => Visibility(
+            visible: !controller.liveStatus.value &&
+                !controller.playerPlaying.value &&
+                controller.detail.value != null &&
+                !controller.loadError.value,
+            child: buildOfflineInfo(context),
+          ),
+        ),
+        // 「只播放声音」：盖住画面（视频解码已被 mpv 的 vid=no 关掉）
+        Obx(
+          () => Visibility(
+            visible: AppSettingsController.instance.playerAudioOnly.value,
+            child: buildAudioOnlyCover(context),
+          ),
+        ),
       ],
+    );
+  }
+
+  /// 「只播放声音」时盖住画面，并给一个一键恢复
+  Widget buildAudioOnlyCover(BuildContext context) {
+    return Container(
+      color: const Color(0xFF0E1013),
+      alignment: Alignment.center,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            Icons.headphones,
+            size: 40,
+            color: Color(0xFF6F767D),
+          ),
+          AppStyle.vGap12,
+          const Text(
+            "只播放声音",
+            style: TextStyle(fontSize: 14, color: Color(0xFF9AA1A8)),
+          ),
+          AppStyle.vGap4,
+          // 显示当前线路：有音频线路时这里就是「🎧 音频线路」，否则是「线路N」
+          Obx(
+            () => Text(
+              controller.currentLineInfo.value,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF6F767D)),
+            ),
+          ),
+          AppStyle.vGap12,
+          TextButton(
+            onPressed: () {
+              AppSettingsController.instance.setPlayerAudioOnly(false);
+              controller.applyAudioOnly();
+            },
+            child: const Text("恢复画面"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 未开播时的信息卡（横版 ≈1.5:1）
+  ///
+  /// - 不显示头像 / 昵称 / 平台 logo /「未开播」标识（状态由场景表达）
+  /// - 卡片里不放操作按钮：刷新用底部操作栏，外链「查看主页」放在右上角「更多」菜单里
+  /// - 时间用主题色，全局统一
+  Widget buildOfflineInfo(BuildContext context) {
+    var detail = controller.detail.value;
+    var showTime = detail?.lastLiveTime ?? "";
+    var hasTime = showTime.isNotEmpty && showTime != "0";
+    // B站未登录时拿不到「上次直播」时间，改成登录引导
+    var needBiliLogin = controller.site.id == Constant.kBiliBili &&
+        !BiliBiliAccountService.instance.logined.value;
+    var roomGone = detail?.roomNotFound == true;
+    var colors = Theme.of(context).colorScheme;
+
+    String label;
+    String bigText;
+    Color bigColor;
+    String subText;
+    if (hasTime) {
+      label = "上次开播时间";
+      bigText = LiveDuration.agoText(showTime);
+      bigColor = colors.primary;
+      // 底部显示完整日期时间（不做「今天/昨天」相对化）
+      subText = LiveDuration.fullTimeText(showTime);
+    } else if (needBiliLogin) {
+      label = "上次开播时间";
+      bigText = "登录后可见";
+      bigColor = colors.primary;
+      subText = "点击这里登录哔哩哔哩";
+    } else if (roomGone) {
+      label = "开播记录";
+      bigText = "已失效";
+      bigColor = const Color(0xFF6F767D);
+      subText = "该直播间已失效或不存在";
+    } else {
+      label = "开播记录";
+      bigText = "暂无";
+      bigColor = const Color(0xFF6F767D);
+      subText = "该主播还没有可查询的直播记录";
+    }
+
+    const double cardWidth = 340;
+    Widget card = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF111418),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF22262C)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Remix.time_line,
+                size: 15,
+                color: Color(0xFF9AA1A8),
+              ),
+              AppStyle.hGap4,
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 12.5,
+                  color: Color(0xFF8B9299),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            bigText,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 34,
+              height: 1.15,
+              fontWeight: FontWeight.w700,
+              color: bigColor,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            subText,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 12.5, color: Color(0xFF8B9299)),
+          ),
+
+        ],
+      ),
+    );
+
+    // B站未登录：整张卡片可点，直接去登录（顺带解锁原画）
+    if (!hasTime && needBiliLogin) {
+      card = InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () async {
+          await AppNavigator.toBiliBiliLogin();
+          if (BiliBiliAccountService.instance.logined.value) {
+            controller.loadData();
+          }
+        },
+        child: card,
+      );
+    }
+
+    return Center(
+      child: Padding(
+        padding: AppStyle.edgeInsetsA16,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // 双重约束自适应：
+            //   宽 ≤ 340，且不超过可用宽度的 82%；
+            //   高 ≤ 可用高度的 72%（小窗口 / 手机横屏会自动缩小）
+            var width = math.min(cardWidth, constraints.maxWidth * 0.82);
+            var height = math.min(width / 1.6, constraints.maxHeight * 0.72);
+            width = math.min(width, height * 1.6);
+            return SizedBox(width: width, height: height, child: card);
+          },
+        ),
+      ),
     );
   }
 
@@ -432,6 +639,24 @@ class LiveRoomPage extends GetView<LiveRoomController> {
     );
   }
 
+  /// 弹幕输入框：设置开启 + 平台支持发送时才显示
+  ///
+  /// 只放在「聊天」页里（见 [buildChatTab]），切到 SC / 关注 / 设置 时不存在。
+  /// 依赖 [LiveRoomController.canSendDanmaku]（Observable）而不是弹幕对象的
+  /// 普通 getter，房间加载、切换后能力变化都能即时刷新。
+  Widget buildDanmakuInput() {
+    return Obx(
+      () {
+        var enabled = AppSettingsController.instance.playerSendDanmaku.value &&
+            controller.canSendDanmaku.value;
+        if (!enabled) {
+          return const SizedBox.shrink();
+        }
+        return DanmakuInputBar(controller: controller);
+      },
+    );
+  }
+
   Widget buildMessageArea() {
     return Expanded(
       child: DefaultTabController(
@@ -467,44 +692,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
             Expanded(
               child: TabBarView(
                 children: [
-                  Obx(
-                    () => Stack(
-                      children: [
-                        ListView.separated(
-                          controller: controller.scrollController,
-                          separatorBuilder: (_, i) => Obx(
-                            () => SizedBox(
-                              // *2与原来的EdgeInsets.symmetric(vertical: )做兼容
-                              height: AppSettingsController
-                                      .instance.chatTextGap.value *
-                                  2,
-                            ),
-                          ),
-                          padding: AppStyle.edgeInsetsA12,
-                          itemCount: controller.messages.length,
-                          itemBuilder: (_, i) {
-                            var item = controller.messages[i];
-                            return buildMessageItem(item);
-                          },
-                        ),
-                        Visibility(
-                          visible: controller.disableAutoScroll.value,
-                          child: Positioned(
-                            right: 12,
-                            bottom: 12,
-                            child: ElevatedButton.icon(
-                              onPressed: () {
-                                controller.disableAutoScroll.value = false;
-                                controller.chatScrollToBottom();
-                              },
-                              icon: const Icon(Icons.expand_more),
-                              label: const Text("最新"),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                  buildChatTab(),
                   if (controller.site.id == Constant.kBiliBili)
                     buildSuperChats(),
                   buildFollowList(),
@@ -516,6 +704,88 @@ class LiveRoomPage extends GetView<LiveRoomController> {
         ),
       ),
     );
+  }
+
+  /// 「聊天」页：消息列表 + 底部弹幕输入条
+  ///
+  /// 输入条属于聊天页本身，所以切到 SC / 关注 / 设置 时自然一起换掉。
+  Widget buildChatTab() {
+    return Column(
+      children: [
+        Expanded(
+          child: Obx(
+            () => Stack(
+              children: [
+                ListView.separated(
+                  controller: controller.scrollController,
+                  separatorBuilder: (_, i) => Obx(
+                    () => SizedBox(
+                      // *2与原来的EdgeInsets.symmetric(vertical: )做兼容
+                      height:
+                          AppSettingsController.instance.chatTextGap.value * 2,
+                    ),
+                  ),
+                  padding: AppStyle.edgeInsetsA12,
+                  itemCount: controller.messages.length,
+                  itemBuilder: (_, i) {
+                    var item = controller.messages[i];
+                    return buildMessageItem(item);
+                  },
+                ),
+                Visibility(
+                  visible: controller.disableAutoScroll.value,
+                  child: Positioned(
+                    right: 12,
+                    bottom: 12,
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        controller.disableAutoScroll.value = false;
+                        controller.chatScrollToBottom();
+                      },
+                      icon: const Icon(Icons.expand_more),
+                      label: const Text("最新"),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        buildDanmakuInput(),
+      ],
+    );
+  }
+
+  /// 消息正文：有 spans 就按「文字 + 表情图」渲染，没有就退回纯文本
+  ///
+  /// 表情图用 NetImage 渲染，它同时支持网络图（B站表情）和 asset:// 本地图（抖音表情包）。
+  List<InlineSpan> buildMessageSpans(LiveMessage message) {
+    final textStyle = TextStyle(
+      color: Get.isDarkMode ? Colors.white : AppColors.black333,
+    );
+    final spans = message.spans;
+    if (spans == null || spans.isEmpty) {
+      return [TextSpan(text: message.message, style: textStyle)];
+    }
+    var emojiSize =
+        AppSettingsController.instance.chatTextSize.value * 1.45;
+    return spans.map<InlineSpan>((span) {
+      if (span.isImage) {
+        return WidgetSpan(
+          alignment: PlaceholderAlignment.middle,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 2),
+            child: NetImage(
+              span.imageUrl!.trim(),
+              width: emojiSize,
+              height: emojiSize,
+              fit: BoxFit.contain,
+            ),
+          ),
+        );
+      }
+      return TextSpan(text: span.text ?? "", style: textStyle);
+    }).toList();
   }
 
   Widget buildMessageItem(LiveMessage message) {
@@ -558,16 +828,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                           fontSize:
                               AppSettingsController.instance.chatTextSize.value,
                         ),
-                        children: [
-                          TextSpan(
-                            text: message.message,
-                            style: TextStyle(
-                              color: Get.isDarkMode
-                                  ? Colors.white
-                                  : AppColors.black333,
-                            ),
-                          )
-                        ],
+                        children: buildMessageSpans(message),
                       ),
                     ),
                   ),
@@ -581,14 +842,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                   color: Colors.grey,
                   fontSize: AppSettingsController.instance.chatTextSize.value,
                 ),
-                children: [
-                  TextSpan(
-                    text: message.message,
-                    style: TextStyle(
-                      color: Get.isDarkMode ? Colors.white : AppColors.black333,
-                    ),
-                  )
-                ],
+                children: buildMessageSpans(message),
               ),
             ),
     );
@@ -780,28 +1034,60 @@ class LiveRoomPage extends GetView<LiveRoomController> {
     ];
   }
 
+  /// 右上角「更多」菜单
+  ///
+  /// 只保留"唯一入口"的功能：截图在播放器控制条上、刷新在底部操作栏、
+  /// 画面尺寸 / 定时关闭在直播间「设置」页签、复制链接在系统分享面板里都有，
+  /// 这里不再重复放 —— 一级菜单过长时顶部会被顶出屏幕。
   void showMore() {
+    // 给弹窗一个高度上限：内容再长也在屏幕内滚动，顶部不会跑出屏幕
+    var maxHeight = MediaQuery.of(Get.context!).size.height * 0.85;
     showModalBottomSheet(
       context: Get.context!,
-      constraints: const BoxConstraints(
-        maxWidth: 600,
-      ),
+      constraints: BoxConstraints(maxWidth: 600, maxHeight: maxHeight),
       isScrollControlled: true,
       builder: (_) => Container(
         padding: EdgeInsets.only(
           bottom: AppStyle.bottomBarHeight,
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+        child: ListView(
+          shrinkWrap: true,
+          padding: EdgeInsets.zero,
           children: [
-            ListTile(
-              leading: const Icon(Icons.refresh),
-              title: const Text("刷新"),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                controller.refreshRoom();
-              },
+            // 后台播放：必须跑前台服务，代价是通知栏有一条低重要度通知
+            Obx(
+              () => SwitchListTile(
+                secondary: const Icon(Icons.headphones),
+                title: const Text("允许后台播放"),
+                subtitle: const Text("退到后台继续播放（通知栏一条静音通知）"),
+                value: AppSettingsController.instance.playerBackgroundPlay.value,
+                onChanged: (e) {
+                  AppSettingsController.instance.setPlayerBackgroundPlay(e);
+                  if (e) {
+                    BackgroundPlayback.ensureNotificationPermission();
+                    if (controller.player.state.playing) {
+                      controller.syncBackgroundPlayback();
+                    }
+                  } else {
+                    BackgroundPlayback.stop();
+                  }
+                },
+              ),
             ),
+            // 只播放声音：关视频解码 + 最低清晰度
+            Obx(
+              () => SwitchListTile(
+                secondary: const Icon(Icons.volume_up),
+                title: const Text("只播放声音"),
+                subtitle: const Text("关闭画面，按最低清晰度拉流"),
+                value: AppSettingsController.instance.playerAudioOnly.value,
+                onChanged: (e) {
+                  AppSettingsController.instance.setPlayerAudioOnly(e);
+                  controller.applyAudioOnly();
+                },
+              ),
+            ),
+            const Divider(height: 1),
             ListTile(
               leading: const Icon(Icons.play_circle_outline),
               trailing: const Icon(Icons.chevron_right),
@@ -820,23 +1106,6 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                 controller.showPlayUrlsSheet();
               },
             ),
-            ListTile(
-              leading: const Icon(Icons.aspect_ratio_outlined),
-              title: const Text("画面尺寸"),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                Get.back();
-                controller.showPlayerSettingsSheet();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.camera_alt_outlined),
-              title: const Text("截图"),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                controller.saveScreenshot();
-              },
-            ),
             Visibility(
               visible: Platform.isAndroid,
               child: ListTile(
@@ -850,15 +1119,6 @@ class LiveRoomPage extends GetView<LiveRoomController> {
               ),
             ),
             ListTile(
-              leading: const Icon(Icons.timer_outlined),
-              title: const Text("定时关闭"),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                Get.back();
-                controller.showAutoExitSheet();
-              },
-            ),
-            ListTile(
               leading: const Icon(Icons.share_sharp),
               title: const Text("分享直播间"),
               trailing: const Icon(Icons.chevron_right),
@@ -867,15 +1127,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                 controller.share();
               },
             ),
-            ListTile(
-              leading: const Icon(Icons.copy),
-              title: const Text("复制链接"),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                Get.back();
-                controller.copyUrl();
-              },
-            ),
+            // 优先唤起平台 App，没装则自动转浏览器 —— 原先的「查看主页」已并入这里
             ListTile(
               leading: const Icon(Icons.open_in_new),
               title: const Text("APP中打开"),

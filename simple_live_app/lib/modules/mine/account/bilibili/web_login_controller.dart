@@ -33,12 +33,25 @@ class BiliBiliWebLoginController extends BaseController {
 
   Future<bool> logined() async {
     try {
-      var cookies =
-          await cookieManager.getCookies(url: WebUri("https://bilibili.com"));
-      if (cookies.isEmpty) {
+      // 登录流程跨了 passport / www / 裸域，只查一个域容易漏掉 SESSDATA
+      var cookieMap = <String, String>{};
+      for (final url in const [
+        "https://www.bilibili.com",
+        "https://bilibili.com",
+        "https://passport.bilibili.com",
+      ]) {
+        var cookies = await cookieManager.getCookies(url: WebUri(url));
+        for (final e in cookies) {
+          if (e.name.isNotEmpty && e.value.isNotEmpty) {
+            cookieMap[e.name] = e.value;
+          }
+        }
+      }
+      if (cookieMap.isEmpty) {
         return false;
       }
-      var cookieStr = cookies.map((e) => "${e.name}=${e.value}").join(";");
+      var cookieStr =
+          cookieMap.entries.map((e) => "${e.key}=${e.value}").join(";");
       Log.i(cookieStr);
       BiliBiliAccountService.instance.setCookie(cookieStr);
       await BiliBiliAccountService.instance.loadUserInfo();

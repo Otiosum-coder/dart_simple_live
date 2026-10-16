@@ -20,7 +20,9 @@ dependencies:
   logger: ^2.6.2 #日志
   intl: ^0.20.2 #国际化
   qr_flutter: ^4.1.0 #二维码生成
-  dynamic_color: ^1.8.1 #动态颜色
+  # 1.9.0 按 AGP 8.13.1 / Kotlin 2.3.20 写（build.gradle.kts 里直接用 kotlin{} 扩展
+  # 却未 apply Kotlin 插件），与本项目 AGP 8.9.1 / Kotlin 2.1.0 不兼容，锁回 1.8.1
+  dynamic_color: 1.8.1 #动态颜色
   path: any
   collection: any
   udp: ^5.0.3 #UDP
@@ -52,7 +54,10 @@ dependencies:
   permission_handler: ^12.0.1 #权限处理
   image_gallery_saver_plus: ^4.0.1 #图片保存到相册
   screen_brightness: ^2.1.7 #亮度控制
-  auto_orientation_v2: ^2.3.6 #屏幕方向
+  # 2.4.x 起该插件改成 Kotlin 源码却不 apply Kotlin 插件（纯 Java 时期是对的），
+  # 在本项目(AGP 8.9.1 / Kotlin 2.1.0)下编不出 AutoOrientationPlugin，
+  # 导致 GeneratedPluginRegistrant 编译失败。锁回 2.3.6（纯 Java、API 一致）。
+  auto_orientation_v2: 2.3.6 #屏幕方向
   wakelock_plus: ^1.4.0 #屏幕常亮
   file_picker: ^10.3.7 #文件选择
   window_manager: ^0.5.1 #窗口管理
@@ -100,5 +105,11 @@ flutter:
   assets:
     - assets/statement.txt
     - assets/images/
+    # 抖音表情包（聊天区/表情渲染用）
+    - assets/images/douyin_emoji/
     - assets/icons/
     - assets/lotties/
+# 悬浮弹幕表情：使用打了富文本补丁的弹幕库（third_party/canvas_danmaku）
+dependency_overrides:
+  canvas_danmaku:
+    path: third_party/canvas_danmaku

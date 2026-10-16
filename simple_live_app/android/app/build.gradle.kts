@@ -40,20 +40,26 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            keyAlias = keystoreProperties["keyAlias"] as String
-            keyPassword = keystoreProperties["keyPassword"] as String
-            storeFile = keystoreProperties["storeFile"]?.let { file(it) }
-            storePassword = keystoreProperties["storePassword"] as String
-            isV1SigningEnabled = true
-            isV2SigningEnabled = true
+        // 没有 android/key.properties（本地开发、或 CI 未配置签名 secrets）时不注册 release 签名，
+        // 构建照常进行（退回默认 debug 签名），不会因为 as String 抛 null 崩溃。
+        if (keystorePropertiesFile.exists()) {
+            create("release") {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = keystoreProperties["storeFile"]?.let { file(it) }
+                storePassword = keystoreProperties["storePassword"] as String
+                isV1SigningEnabled = true
+                isV2SigningEnabled = true
+            }
         }
     }
 
     buildTypes {
         release {
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("release")
+            // 有 key.properties 就用 release 签名，否则退回默认（debug）签名
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

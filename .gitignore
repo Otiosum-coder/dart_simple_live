@@ -3,3 +3,11 @@ simple_live_tv_app/.vscode/settings.json
 
 # macOS Spotlight Search index file
 *.DS_Store
+# 本地便利脚本（含本机绝对路径，不提交）
+run_windows.cmd
+run_windows.ps1
+
+
+# Android 构建产物（上游误提交，含本地路径）
+simple_live_app/android/build/
+

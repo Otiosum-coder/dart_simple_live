@@ -10,6 +10,16 @@ class SyncClientRequest {
     return SyncClientInfoModel.fromJson(data);
   }
 
+  /// 反向同步：拉取对方导出的数据
+  Future<Map<String, dynamic>> fetchExport(SyncClinet client) async {
+    var url = "http://${client.address}:${client.port}/sync/export";
+    var data = await HttpClient.instance.getJson(url);
+    if (data is! Map) {
+      throw "对方返回异常（可能版本过旧，不支持反向同步）";
+    }
+    return Map<String, dynamic>.from(data);
+  }
+
   Future<bool> syncFollow(
     SyncClinet client,
     dynamic body, {

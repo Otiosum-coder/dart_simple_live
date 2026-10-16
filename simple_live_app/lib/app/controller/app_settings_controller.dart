@@ -97,6 +97,15 @@ class AppSettingsController extends GetxController {
     );
     pipHideDanmu.value = LocalStorageService.instance
         .getValue(LocalStorageService.kPIPHideDanmu, true);
+    playershowSuperChat.value = LocalStorageService.instance
+        .getValue(LocalStorageService.kPlayerShowSuperChat, true);
+    // 发送弹幕默认关闭：必须从存储恢复，否则重启后又变回关闭/开启不一致
+    playerSendDanmaku.value = LocalStorageService.instance
+        .getValue(LocalStorageService.kPlayerSendDanmaku, false);
+    playerBackgroundPlay.value = LocalStorageService.instance
+        .getValue(LocalStorageService.kPlayerBackgroundPlay, false);
+    playerAudioOnly.value = LocalStorageService.instance
+        .getValue(LocalStorageService.kPlayerAudioOnly, false);
 
     styleColor.value = LocalStorageService.instance
         .getValue(LocalStorageService.kStyleColor, 0xff3498db);
@@ -106,6 +115,9 @@ class AppSettingsController extends GetxController {
 
     bilibiliLoginTip.value = LocalStorageService.instance
         .getValue(LocalStorageService.kBilibiliLoginTip, true);
+
+    douyuLoginTip.value = LocalStorageService.instance
+        .getValue(LocalStorageService.kDouyuLoginTip, true);
 
     playerBufferSize.value = LocalStorageService.instance
         .getValue(LocalStorageService.kPlayerBufferSize, 32);
@@ -380,6 +392,31 @@ class AppSettingsController extends GetxController {
         .setValue(LocalStorageService.kPlayerShowSuperChat, e);
   }
 
+  /// 允许发送弹幕：默认关闭，用户在设置里手动打开
+  var playerSendDanmaku = false.obs;
+  void setPlayerSendDanmaku(bool e) {
+    playerSendDanmaku.value = e;
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kPlayerSendDanmaku, e);
+  }
+
+  /// 允许后台播放：打开后播放中会启动前台服务（通知栏一条低重要度通知），
+  /// 否则 Android 会把播放中的进程当缓存进程回收
+  var playerBackgroundPlay = false.obs;
+  void setPlayerBackgroundPlay(bool e) {
+    playerBackgroundPlay.value = e;
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kPlayerBackgroundPlay, e);
+  }
+
+  /// 只播放声音：关掉视频解码 + 按最低清晰度拉流，省电省流量
+  var playerAudioOnly = false.obs;
+  void setPlayerAudioOnly(bool e) {
+    playerAudioOnly.value = e;
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kPlayerAudioOnly, e);
+  }
+
   RxSet<String> shieldList = <String>{}.obs;
   void addShieldList(String e) {
     shieldList.add(e);
@@ -468,6 +505,14 @@ class AppSettingsController extends GetxController {
     bilibiliLoginTip.value = e;
     LocalStorageService.instance
         .setValue(LocalStorageService.kBilibiliLoginTip, e);
+  }
+
+  /// 斗鱼 2026-09 起未登录用户看原画/蓝光4M 会被限制，默认提示一次
+  var douyuLoginTip = true.obs;
+  void setDouyuLoginTip(bool e) {
+    douyuLoginTip.value = e;
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kDouyuLoginTip, e);
   }
 
   var logEnable = false.obs;

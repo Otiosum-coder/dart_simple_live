@@ -16,6 +16,9 @@ import 'package:simple_live_app/app/event_bus.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
+import 'package:simple_live_app/services/background_playback.dart';
+import 'package:simple_live_app/services/bilibili_account_service.dart';
+import 'package:simple_live_app/services/douyu_account_service.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/history.dart';
 import 'package:simple_live_app/modules/live_room/player/player_controller.dart';
@@ -28,6 +31,27 @@ import 'package:simple_live_core/simple_live_core.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+/// 画面内 SC 卡片的展示状态
+///
+/// 关键：**显示到什么时候记在数据层**（[expireAt]），UI 只负责渲染 ——
+/// 这样切全屏、转屏、布局重建都不会把 15 秒重新计时。
+class OverlaySuperChat {
+  final LiveSuperChatMessage message;
+  final DateTime expireAt;
+  OverlaySuperChat(this.message, this.expireAt);
+
+  /// 剩余秒数（不会小于 0）
+  int get remainSeconds {
+    var s = expireAt.difference(DateTime.now()).inSeconds;
+    return s < 0 ? 0 : s;
+  }
+
+  /// 剩余比例，用于进度条
+  double get progress =>
+      (remainSeconds / LiveRoomController.overlaySuperChatSeconds)
+          .clamp(0.0, 1.0);
+}
+
 class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   final Site pSite;
   final String pRoomId;
@@ -39,6 +63,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     rxSite = pSite.obs;
     rxRoomId = pRoomId.obs;
     liveDanmaku = site.liveSite.getDanmaku();
+    canSendDanmaku.value = liveDanmaku.canSendDanmaku;
     // 抖音应该默认是竖屏的
     if (site.id == "douyin") {
       isVertical.value = true;
@@ -56,11 +81,28 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   var liveStatus = false.obs;
   RxList<LiveSuperChatMessage> superChats = RxList<LiveSuperChatMessage>();
 
+  /// 画面内 SC 卡片显示时长（秒，固定）
+  static const int overlaySuperChatSeconds = 15;
+
+  /// 画面内 SC 最多同时显示几条
+  static const int overlaySuperChatMaxCount = 4;
+
+  /// 画面内 SC 展示列表（过期时间由数据层决定，UI 只渲染）
+  RxList<OverlaySuperChat> overlaySuperChats = <OverlaySuperChat>[].obs;
+
+  Timer? _overlayScTimer;
+
   /// 滚动控制
   final ScrollController scrollController = ScrollController();
 
   /// 聊天信息
   RxList<LiveMessage> messages = RxList<LiveMessage>();
+
+  /// 是否「确认拿不到播放地址」（未开播 / 大航海等付费限定 / 取流失败）
+  ///
+  /// 只在取流流程结束后才置 true —— 用它控制兜底封面，
+  /// 不能直接用 playUrls.isEmpty，否则每次进房加载时都会闪一下封面
+  var playUrlEmpty = false.obs;
 
   /// 清晰度数据
   RxList<LivePlayQuality> qualites = RxList<LivePlayQuality>();
@@ -119,6 +161,18 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     loadData();
 
     scrollController.addListener(scrollListener);
+
+    // 后台播放：跟随播放状态启停前台服务。
+    // 开始播放时 App 还在前台，满足 Android 12+ 「禁止从后台启动前台服务」的限制。
+    _bgPlayingSubscription = player.stream.playing.listen((playing) {
+      // 界面据此判断"确实在播"：避免切线路失败时误显示未开播卡片
+      playerPlaying.value = playing;
+      if (playing) {
+        syncBackgroundPlayback();
+      } else {
+        BackgroundPlayback.stop();
+      }
+    });
 
     super.onInit();
   }
@@ -237,6 +291,14 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         return;
       }
 
+      // 表情弹幕：把富文本片段一起传下去，悬浮弹幕也能显示表情图（默认开启）
+      final contentParts = msg.spans
+          ?.map(
+            (e) => e.isImage
+                ? DanmakuContentPart.image(e.imageUrl!.trim())
+                : DanmakuContentPart.text(e.text ?? ""),
+          )
+          .toList();
       addDanmaku([
         DanmakuContentItem(
           msg.message,
@@ -246,13 +308,141 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
             msg.color.g,
             msg.color.b,
           ),
+          // 自己发的弹幕：库会自动加描边 + 强制占一条轨道（保证看得见）
+          selfSend: msg.isSelf,
+          imageUrls: msg.imageUrls,
+          parts: (contentParts == null || contentParts.isEmpty)
+              ? null
+              : contentParts,
         ),
       ]);
     } else if (msg.type == LiveMessageType.online) {
       online.value = msg.data;
     } else if (msg.type == LiveMessageType.superChat) {
       superChats.add(msg.data);
+      addOverlaySuperChat(msg.data);
     }
+  }
+
+  /// 全屏下的弹幕输入条是否显示（按回车或点控制条按钮唤起）
+  var showDanmakuInput = false.obs;
+
+  /// 后台播放用的播放状态订阅
+  StreamSubscription<bool>? _bgPlayingSubscription;
+
+  /// 是否只播放声音
+  bool get audioOnly => AppSettingsController.instance.playerAudioOnly.value;
+
+  /// 按「允许后台播放」开关同步前台服务
+  ///
+  /// 关闭开关时立刻停服务（通知随之消失）；打开开关时如果正在播放就马上起服务。
+  void syncBackgroundPlayback() {
+    if (!AppSettingsController.instance.playerBackgroundPlay.value) {
+      BackgroundPlayback.stop();
+      return;
+    }
+    var user = detail.value?.userName ?? "";
+    var title = detail.value?.title ?? "";
+    var text = user.isEmpty ? title : "$user · $title";
+    BackgroundPlayback.start(text.isEmpty ? "正在后台播放" : text);
+  }
+
+  /// 加大 mpv 缓冲与网络超时，减少「卡一下就切线路」
+  Future<void> applyNetworkBuffering() async {
+    var platform = player.platform;
+    if (platform is NativePlayer) {
+      // 注意：不要设 cache / cache-secs —— Windows 版 mpv 会反复报
+      // 「lavf: Failed to create file cache.」反而更不稳，实测去掉更好
+      var options = {
+        'demuxer-readahead-secs': '20',
+        'demuxer-max-bytes': '64MiB',
+        'demuxer-max-back-bytes': '32MiB',
+        'network-timeout': '30',
+      };
+      for (var entry in options.entries) {
+        try {
+          await platform.setProperty(entry.key, entry.value);
+        } catch (e) {
+          Log.logPrint('设置 mpv 参数 ${entry.key} 失败：$e');
+        }
+      }
+    }
+  }
+
+  /// 「只播放声音」：用 mpv 的 vid 属性关掉/恢复视频解码
+  ///
+  /// 只关解码、不动音频管线，所以画面消失但声音不断；
+  /// 直播流一般没有独立音轨，清晰度会在 getPlayQualites() 里降到最低。
+  Future<void> applyAudioOnly() async {
+    var platform = player.platform;
+    if (platform is NativePlayer) {
+      try {
+        await platform.setProperty('vid', audioOnly ? 'no' : 'auto');
+      } catch (e) {
+        Log.logPrint('切换只播放声音失败：$e');
+      }
+    }
+    // 音频线路联动：开启时真正切到音频线路，关闭时回到视频线路
+    if (audioLineIndex != null) {
+      if (audioOnly && currentLineIndex != audioLineIndex) {
+        changePlayLine(audioLineIndex!);
+      } else if (!audioOnly && currentLineIndex == audioLineIndex) {
+        changePlayLine(0);
+      }
+    }
+  }
+
+  /// 当前房间是否支持发送弹幕（由平台的弹幕实现决定）
+  ///
+  /// 必须是 Observable：房间加载 / 切换后能力可能变化，
+  /// 若直接读 [liveDanmaku].canSendDanmaku，UI 不会自动刷新，
+  /// 就会出现「要进出一次全屏才显示输入框」的问题。
+  var canSendDanmaku = false.obs;
+
+  /// 上次发送弹幕的时间（本地节流，避免撞平台风控）
+  DateTime? _lastSendTime;
+
+  /// 发送弹幕：成功返回 null，失败返回可展示的原因
+  Future<String?> sendDanmaku(String text) async {
+    var message = text.trim();
+    if (message.isEmpty) {
+      return "弹幕内容不能为空";
+    }
+    if (!AppSettingsController.instance.playerSendDanmaku.value) {
+      return "请先在「设置 - 播放设置」里打开「允许发送弹幕」";
+    }
+    if (!liveDanmaku.canSendDanmaku) {
+      return "当前平台暂不支持发送弹幕";
+    }
+    if (!liveStatus.value) {
+      return "主播未开播，无法发送弹幕";
+    }
+    var loginTip = _loginCheck();
+    if (loginTip != null) {
+      return loginTip;
+    }
+    var last = _lastSendTime;
+    if (last != null && DateTime.now().difference(last).inSeconds < 2) {
+      return "发送太快了，请稍后再试";
+    }
+    var error = await liveDanmaku.sendDanmaku(message);
+    if (error == null) {
+      _lastSendTime = DateTime.now();
+    }
+    return error;
+  }
+
+  /// 未登录时返回提示，已登录返回 null
+  String? _loginCheck() {
+    if (site.id == Constant.kBiliBili &&
+        !BiliBiliAccountService.instance.logined.value) {
+      return "请先登录哔哩哔哩";
+    }
+    if (site.id == Constant.kDouyu &&
+        !DouyuAccountService.instance.logined.value) {
+      return "请先登录斗鱼";
+    }
+    return null;
   }
 
   /// 添加一条系统消息
@@ -286,6 +476,13 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       update();
       addSysMsg("正在读取直播间信息");
       detail.value = await site.liveSite.getRoomDetail(roomId: roomId);
+
+      // 把最新状态同步回关注列表，避免两边数据不一致
+      FollowService.instance.syncRoomStatus(
+        siteId: site.id,
+        requestedRoomId: roomId,
+        detail: detail.value!,
+      );
 
       if (site.id == Constant.kDouyin) {
         // 1.6.0之前收藏的WebRid
@@ -321,6 +518,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       followed.value = DBService.instance.getFollowExist("${site.id}_$roomId");
       online.value = detail.value!.online;
       liveStatus.value = detail.value!.status || detail.value!.isRecord;
+      // 换房间/重新加载时先复位，避免上一个直播间的大航海封面残留
+      playUrlEmpty.value = false;
       if (liveStatus.value) {
         getPlayQualites();
       }
@@ -330,6 +529,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       addSysMsg("开始连接弹幕服务器");
       initDanmau();
       liveDanmaku.start(detail.value?.danmakuData);
+      // 平台能力可能要到 start() 之后才明确，同步一次让输入框即时出现
+      canSendDanmaku.value = liveDanmaku.canSendDanmaku;
       startLiveDurationTimer(); // 启动开播时长定时器
     } catch (e) {
       Log.logPrint(e);
@@ -356,7 +557,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       }
       qualites.value = playQualites;
       var qualityLevel = await getQualityLevel();
-      if (qualityLevel == 2) {
+      if (audioOnly) {
+        // 「只播放声音」：直接取最低清晰度，省电、省流量
+        currentQuality = playQualites.length - 1;
+      } else if (qualityLevel == 2) {
         //最高
         currentQuality = 0;
       } else if (qualityLevel == 0) {
@@ -370,8 +574,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
       getPlayUrl();
     } catch (e) {
+      // B站的大航海/付费限定在 getPlayQualites 里抛出（没有 playurl）
+      playUrlEmpty.value = e is CoreError && e.statusCode == 403;
       Log.logPrint(e);
-      SmartDialog.showToast("无法读取播放清晰度");
+      SmartDialog.showToast(e is CoreError ? e.message : "无法读取播放清晰度");
     }
   }
 
@@ -391,25 +597,45 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   void getPlayUrl() async {
     playUrls.clear();
+    playUrlEmpty.value = false;
     currentQualityInfo.value = qualites[currentQuality].quality;
     currentLineInfo.value = "";
     currentLineIndex = -1;
-    var playUrl = await site.liveSite
-        .getPlayUrls(detail: detail.value!, quality: qualites[currentQuality]);
-    if (playUrl.urls.isEmpty) {
-      SmartDialog.showToast("无法读取播放地址");
+    try {
+      var playUrl = await site.liveSite.getPlayUrls(
+          detail: detail.value!, quality: qualites[currentQuality]);
+      if (playUrl.urls.isEmpty) {
+        SmartDialog.showToast("无法读取播放地址");
+        return;
+      }
+      playUrls.value = playUrl.urls;
+      playHeaders = playUrl.headers;
+      audioLineIndex = playUrl.audioLineIndex;
+    } catch (e) {
+      // 只有大航海/付费限定（403）才盖兜底封面
+      playUrlEmpty.value = e is CoreError && e.statusCode == 403;
+      Log.logPrint(e);
+      SmartDialog.showToast(e is CoreError ? e.message : "无法读取播放地址");
       return;
     }
-    playUrls.value = playUrl.urls;
-    playHeaders = playUrl.headers;
-    currentLineIndex = 0;
-    currentLineInfo.value = "线路${currentLineIndex + 1}";
+    // 保留用户当前选择的线路；只有下标失效（首次加载 / 线路列表变了）时才自动选：
+    // 「只播放声音」开启且平台有音频线路 → 优先音频线路
+    if (currentLineIndex < 0 || currentLineIndex >= playUrls.length) {
+      currentLineIndex =
+          (audioOnly && audioLineIndex != null) ? audioLineIndex! : 0;
+    }
+    currentLineInfo.value = lineLabel(currentLineIndex);
     //重置错误次数
     mediaErrorRetryCount = 0;
     initPlaylist();
   }
 
-  void changePlayLine(int index) {
+  /// [fromUser] = 用户在界面上主动点的线路（内部自动跳线路时传 false）
+  void changePlayLine(int index, {bool fromUser = false}) {
+    // 模式跟着线路走：选音频线路 → 开「只播放声音」；选视频线路 → 关
+    if (fromUser && audioLineIndex != null) {
+      AppSettingsController.instance.setPlayerAudioOnly(index == audioLineIndex);
+    }
     currentLineIndex = index;
     //重置错误次数
     mediaErrorRetryCount = 0;
@@ -417,7 +643,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   void initPlaylist() async {
-    currentLineInfo.value = "线路${currentLineIndex + 1}";
+    currentLineInfo.value = lineLabel(currentLineIndex);
     errorMsg.value = "";
 
     final mediaList = playUrls.map((url) {
@@ -431,11 +657,18 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     // 初始化播放器并设置 ao 参数
     await initializePlayer();
 
+    // 加大 mpv 缓冲与网络超时：桌面端网络一抖就会卡顿 → 被判定线路失效 → 一直切线路，
+    // 这里给足缓冲（在 open 之前设置才生效），不影响起播速度
+    await applyNetworkBuffering();
+
     await player.open(Playlist(mediaList));
+
+    // 每次重新拉流后都要重新应用「只播放声音」（切线路/清晰度会重置）
+    await applyAudioOnly();
   }
 
   void setPlayer() async {
-    currentLineInfo.value = "线路${currentLineIndex + 1}";
+    currentLineInfo.value = lineLabel(currentLineIndex);
     errorMsg.value = "";
 
     await player.jump(currentLineIndex);
@@ -444,11 +677,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   @override
   void mediaEnd() async {
     super.mediaEnd();
-    if (mediaErrorRetryCount < 2) {
+    if (mediaErrorRetryCount < 4) {
       Log.d("播放结束，尝试第${mediaErrorRetryCount + 1}次刷新");
-      if (mediaErrorRetryCount == 1) {
-        //延迟一秒再刷新
-        await Future.delayed(const Duration(seconds: 1));
+      // 递增退避：桌面端偶发卡顿/缓冲时不要立刻判定这条线路不可用而跳线路
+      if (mediaErrorRetryCount >= 1) {
+        await Future.delayed(Duration(seconds: mediaErrorRetryCount));
       }
       mediaErrorRetryCount += 1;
       //刷新一次
@@ -457,9 +690,15 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
 
     Log.d("播放结束");
-    // 遍历线路，如果全部链接都断开就是直播结束了
     if (playUrls.length - 1 == currentLineIndex) {
-      liveStatus.value = false;
+      // 关键：不要在这里把 liveStatus 置为 false。
+      // liveStatus 只应来自房间详情接口（detail.status）——
+      // 网络波动/线路异常会让所有线路都播放失败，但那不等于主播下播；
+      // 置 false 会把"暂无开播记录"卡片压在正常直播画面上。
+      // 正确做法：重新查询一次房间详情，由接口告诉我们是否真的下播。
+      errorMsg.value = "播放中断，正在重新获取房间状态";
+      SmartDialog.showToast("播放中断，正在重新获取房间状态");
+      loadData();
     } else {
       changePlayLine(currentLineIndex + 1);
 
@@ -467,15 +706,25 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
   }
 
+  /// 播放器当前是否真的在播放
+  var playerPlaying = false.obs;
+
+  /// 音频线路在 playUrls 里的下标（null = 当前平台没有音频线路）
+  int? audioLineIndex;
+
+  /// 线路名称：音频线路单独标注（带耳机）
+  String lineLabel(int index) =>
+      index == audioLineIndex ? "🎧 音频线路" : "线路${index + 1}";
+
   int mediaErrorRetryCount = 0;
   @override
   void mediaError(String error) async {
     super.mediaEnd();
-    if (mediaErrorRetryCount < 2) {
+    if (mediaErrorRetryCount < 4) {
       Log.d("播放失败，尝试第${mediaErrorRetryCount + 1}次刷新");
-      if (mediaErrorRetryCount == 1) {
-        //延迟一秒再刷新
-        await Future.delayed(const Duration(seconds: 1));
+      // 递增退避：桌面端偶发卡顿/缓冲时不要立刻判定这条线路不可用而跳线路
+      if (mediaErrorRetryCount >= 1) {
+        await Future.delayed(Duration(seconds: mediaErrorRetryCount));
       }
       mediaErrorRetryCount += 1;
       //刷新一次
@@ -493,12 +742,66 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
   }
 
+  /// 添加一条画面内 SC（已到期的不会加入）
+  void addOverlaySuperChat(LiveSuperChatMessage sc, {int? maxSeconds}) {
+    if (overlaySuperChats.any((e) => e.message == sc)) {
+      return;
+    }
+    var seconds = maxSeconds ?? overlaySuperChatSeconds;
+    if (seconds <= 0) {
+      return;
+    }
+    overlaySuperChats.add(
+      OverlaySuperChat(sc, DateTime.now().add(Duration(seconds: seconds))),
+    );
+    // 超过上限：立刻移除最旧的一条（最上面那条被顶掉）
+    while (overlaySuperChats.length > overlaySuperChatMaxCount) {
+      overlaySuperChats.removeAt(0);
+    }
+    _startOverlayScTimer();
+  }
+
+  /// 统一的过期清理：整个页面只有一个 Timer，UI 不再各自计时
+  void _startOverlayScTimer() {
+    if (_overlayScTimer != null) {
+      return;
+    }
+    _overlayScTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      var now = DateTime.now();
+      overlaySuperChats.removeWhere((e) => !e.expireAt.isAfter(now));
+      if (overlaySuperChats.isEmpty) {
+        _overlayScTimer?.cancel();
+        _overlayScTimer = null;
+      }
+    });
+  }
+
+  /// 清空画面内 SC
+  void clearOverlaySuperChats() {
+    _overlayScTimer?.cancel();
+    _overlayScTimer = null;
+    overlaySuperChats.clear();
+  }
+
   /// 读取SC
   void getSuperChatMessage() async {
     try {
       var sc =
           await site.liveSite.getSuperChatMessage(roomId: detail.value!.roomId);
       superChats.addAll(sc);
+      // 进房时把「B站 上还在展示期」的 SC 也放进画面，
+      // 时长取剩余时间与 15 秒的较小值（已到期的不加，避免负数）
+      var now = DateTime.now().millisecondsSinceEpoch;
+      for (var item in sc) {
+        var remain = (item.endTime.millisecondsSinceEpoch - now) ~/ 1000;
+        if (remain > 0) {
+          addOverlaySuperChat(
+            item,
+            maxSeconds:
+                remain < overlaySuperChatSeconds ? remain : overlaySuperChatSeconds,
+          );
+        }
+      }
     } catch (e) {
       Log.logPrint(e);
       addSysMsg("SC读取失败");
@@ -685,16 +988,18 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
           Get.back();
           //currentLineIndex = i;
           //setPlayer();
-          changePlayLine(e ?? 0);
+          changePlayLine(e ?? 0, fromUser: true);
         },
         child: ListView.builder(
           itemCount: playUrls.length,
           itemBuilder: (_, i) {
             return RadioListTile(
               value: i,
-              title: Text("线路${i + 1}"),
+              title: Text(lineLabel(i)),
               secondary: Text(
-                playUrls[i].contains(".flv") ? "FLV" : "HLS",
+                i == audioLineIndex
+                    ? "音频"
+                    : (playUrls[i].contains(".flv") ? "FLV" : "HLS"),
               ),
             );
           },
@@ -981,10 +1286,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     liveDanmaku.stop();
     messages.clear();
     superChats.clear();
+    clearOverlaySuperChats();
     danmakuController?.clear();
 
     // 重新设置LiveDanmaku
     liveDanmaku = site.liveSite.getDanmaku();
+    canSendDanmaku.value = liveDanmaku.canSendDanmaku;
 
     // 停止播放
     await player.stop();
@@ -1056,6 +1363,10 @@ ${error?.stackTrace}''');
     WidgetsBinding.instance.removeObserver(this);
     scrollController.removeListener(scrollListener);
     autoExitTimer?.cancel();
+
+    // 离开直播间就不再需要后台播放服务（否则会留下一条常驻通知）
+    _bgPlayingSubscription?.cancel();
+    BackgroundPlayback.stop();
 
     liveDanmaku.stop();
     danmakuController = null;

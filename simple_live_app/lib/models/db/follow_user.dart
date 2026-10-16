@@ -41,8 +41,14 @@ class FollowUser {
   /// 0=未知(加载中) 1=未开播 2=直播中
   Rx<int> liveStatus = 0.obs;
 
-  /// 开播时间戳
+  /// 开播时间戳（直播中）
   String? liveStartTime;
+
+  /// 上次直播时间戳（未开播时展示）
+  String? lastLiveTime;
+
+  /// 房间已失效/不存在（旧房间号、主播已注销），与「未开播」区分
+  bool roomNotFound = false;
 
   factory FollowUser.fromJson(Map<String, dynamic> json) => FollowUser(
         id: json['id'],

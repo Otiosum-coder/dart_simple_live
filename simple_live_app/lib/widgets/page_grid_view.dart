@@ -106,7 +106,11 @@ class PageGridView extends StatelessWidget {
             ),
           ),
           Offstage(
-            offstage: !pageController.pageEmpty.value,
+            // 空态必须同时满足「标记为空」+「列表确实没数据」：
+            // 导入关注文件 / 取消关注等路径会绕过 loadData() 直接填列表，
+            // 只标记没复位时就会出现空态叠在列表上的观感 bug
+            offstage: !(pageController.pageEmpty.value &&
+                pageController.list.isEmpty),
             child: AppEmptyWidget(
               onRefresh: () => pageController.refreshData(),
             ),

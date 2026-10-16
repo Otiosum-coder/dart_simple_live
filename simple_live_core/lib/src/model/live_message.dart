@@ -30,12 +30,25 @@ class LiveMessage {
 
   /// 弹幕颜色
   final LiveMessageColor color;
+
+  /// 是否是自己发送的弹幕（聊天列表里用描边突出）
+  final bool isSelf;
+
+  /// 弹幕内表情图片地址（兼容旧渲染端：不认 [spans] 时按顺序追加即可）
+  final List<String>? imageUrls;
+
+  /// 富文本片段：按平台返回的顺序保存文字与表情图片，
+  /// 聊天区可以把表情插回原来的位置。
+  final List<LiveMessageSpan>? spans;
   LiveMessage({
     required this.type,
     required this.userName,
     required this.message,
     this.data,
     required this.color,
+    this.isSelf = false,
+    this.imageUrls,
+    this.spans,
   });
 
   @override
@@ -46,8 +59,24 @@ class LiveMessage {
       "message": message,
       "data": data.toString(),
       "color": color.toString(),
+      "imageUrls": imageUrls,
+      "spans": spans?.map((e) => e.toJson()).toList(),
     });
   }
+}
+
+/// 一条弹幕里的一个片段：要么是文字，要么是一张表情图
+class LiveMessageSpan {
+  final String? text;
+  final String? imageUrl;
+
+  const LiveMessageSpan.text(this.text) : imageUrl = null;
+  const LiveMessageSpan.image(this.imageUrl) : text = null;
+
+  bool get isImage => imageUrl != null && imageUrl!.trim().isNotEmpty;
+  bool get isText => text != null && text!.isNotEmpty;
+
+  Map<String, dynamic> toJson() => {"text": text, "imageUrl": imageUrl};
 }
 
 class LiveMessageColor {

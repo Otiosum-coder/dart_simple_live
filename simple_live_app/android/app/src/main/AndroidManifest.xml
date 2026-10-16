@@ -1,5 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.xycz.simple_live">
    <uses-permission android:name="android.permission.INTERNET" />
+   <!-- 后台播放：必须跑在前台服务里，否则进程会被系统/OEM 当作缓存进程回收 -->
+   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+   <!-- Android 14+：mediaPlayback 类型前台服务的专用权限 -->
+   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+   <!-- Android 13+：前台服务的通知需要该权限（拒绝时服务仍可运行，但通知不显示） -->
+   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+   <uses-permission android:name="android.permission.WAKE_LOCK" />
    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
@@ -33,6 +40,12 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- 后台播放前台服务：type 必须是 mediaPlayback，否则 Android 14+ 会拒绝启动 -->
+        <service
+            android:name=".PlaybackService"
+            android:exported="false"
+            android:stopWithTask="true"
+            android:foregroundServiceType="mediaPlayback" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

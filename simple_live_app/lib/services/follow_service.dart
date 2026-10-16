@@ -16,7 +16,10 @@ import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/follow_user_tag.dart';
+import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/db_service.dart';
+import 'package:simple_live_app/services/local_storage_service.dart';
+import 'package:simple_live_core/simple_live_core.dart';
 
 class FollowService extends GetxService {
   StreamSubscription<dynamic>? subscription;
@@ -197,6 +200,10 @@ class FollowService extends GetxService {
 
     Log.logPrint("开始更新关注状态，并发数: $concurrency，总数: ${followList.length}");
 
+    // B站：登录后先用「关注列表」批量接口按需预取（目标驱动），
+    // 这样未开播的房间也能拿到上次直播时间，且不用逐个房间查
+    await prepareBiliFollowing();
+
     // 按平台交错排列，避免单一平台阻塞
     var interleavedList = interleaveByPlatform(followList);
 
@@ -219,26 +226,86 @@ class FollowService extends GetxService {
 
     await Future.wait(workers);
 
+    // 刷新结束后再存一次：此时后台的深层补齐可能已经完成
+    saveBiliFollowingCache();
+
     Log.logPrint("关注状态更新完成");
+  }
+
+  bool _biliCacheLoaded = false;
+
+  /// B站关注列表批量预取（目标驱动 + 持久化 + 渐进补齐）
+  Future<void> prepareBiliFollowing() async {
+    try {
+      // 确保站点已注入登录 Cookie（BiliBiliAccountService 是异步加载的，
+      // 刷新可能早于它完成，这里主动同步一次）
+      if (BiliBiliAccountService.instance.logined.value) {
+        BiliBiliAccountService.instance.setSite();
+      }
+      var live = Sites.allSites[Constant.kBiliBili]?.liveSite;
+      if (live is! BiliBiliSite || live.cookie.isEmpty) {
+        Log.logPrint("B站未登录，跳过关注列表批量预取");
+        return;
+      }
+      // 冷启动先恢复上次的缓存，界面立刻有数据
+      if (!_biliCacheLoaded) {
+        _biliCacheLoaded = true;
+        var saved = LocalStorageService.instance
+            .getValue(LocalStorageService.kBiliFollowingCache, "");
+        if (saved.isNotEmpty) {
+          live.importFollowingCacheJson(saved);
+        }
+      }
+      var roomIds = followList
+          .where((e) => e.siteId == Constant.kBiliBili)
+          .map((e) => e.roomId)
+          .toList();
+      if (roomIds.isEmpty) {
+        return;
+      }
+      await live.primeFollowingStatus(roomIds);
+      saveBiliFollowingCache();
+    } catch (e) {
+      Log.logPrint(e);
+    }
+  }
+
+  /// 持久化 B站关注列表缓存（冷启动即可显示上次直播时间）
+  void saveBiliFollowingCache() {
+    try {
+      var live = Sites.allSites[Constant.kBiliBili]?.liveSite;
+      if (live is! BiliBiliSite || live.cookie.isEmpty) {
+        return;
+      }
+      LocalStorageService.instance.setValue(
+        LocalStorageService.kBiliFollowingCache,
+        live.exportFollowingCacheJson(),
+      );
+    } catch (e) {
+      Log.logPrint(e);
+    }
   }
 
   Future updateLiveStatus(FollowUser item) async {
     try {
       var site = Sites.allSites[item.siteId]!;
-      // 先只查状态
-      var isLiving = await site.liveSite.getLiveStatus(roomId: item.roomId);
-      item.liveStatus.value = isLiving ? 2 : 1;
-      if (item.liveStatus.value == 2) {
-        // 只有正在直播时才查详细信息
-        var detail = await site.liveSite.getRoomDetail(roomId: item.roomId);
-        item.liveStartTime = detail.showTime;
+      // 一次拿全：是否直播 + 本场开播时间 / 上次直播时间
+      var status = await site.liveSite.getRoomStatus(roomId: item.roomId);
+      item.liveStatus.value = status.isLive ? 2 : 1;
+      item.roomNotFound = status.roomNotFound;
+      if (status.isLive) {
+        item.liveStartTime = status.startTime;
+        item.lastLiveTime = null;
       } else {
         item.liveStartTime = null;
+        item.lastLiveTime = status.lastLiveTime;
       }
     } catch (e) {
       Log.logPrint(e);
       item.liveStatus.value = 0;
       item.liveStartTime = null;
+      item.lastLiveTime = null;
+      item.roomNotFound = false;
     } finally {
       updatedCount++;
       if (updatedCount >= followList.length) {
@@ -248,8 +315,53 @@ class FollowService extends GetxService {
     }
   }
 
+  /// 进入直播间后把最新状态同步回关注列表
+  ///
+  /// 关注列表可能还没刷新到（例如 B站 排名较后的主播没命中批量缓存），
+  /// 但进房间时已经拿到了准确数据，这里同步过去避免「外面未开播、进去却有数据」。
+  void syncRoomStatus({
+    required String siteId,
+    required String requestedRoomId,
+    required LiveRoomDetail detail,
+  }) {
+    FollowUser? item;
+    for (var e in followList) {
+      if (e.siteId == siteId &&
+          (e.roomId == detail.roomId || e.roomId == requestedRoomId)) {
+        item = e;
+        break;
+      }
+    }
+    if (item == null) {
+      return;
+    }
+    var status = detail.status ? 2 : 1;
+    var startTime = detail.status ? detail.showTime : null;
+    var lastLiveTime = detail.status ? null : detail.lastLiveTime;
+    if (item.liveStatus.value == status &&
+        item.liveStartTime == startTime &&
+        item.lastLiveTime == lastLiveTime) {
+      return;
+    }
+    item.liveStatus.value = status;
+    item.liveStartTime = startTime;
+    item.lastLiveTime = lastLiveTime;
+    item.roomNotFound = detail.roomNotFound;
+    Log.logPrint("已同步直播间状态到关注列表：$siteId/$requestedRoomId");
+    filterData();
+  }
+
   void filterData() {
-    followList.sort((a, b) => b.liveStatus.value.compareTo(a.liveStatus.value));
+    followList.sort((a, b) {
+      var status = b.liveStatus.value.compareTo(a.liveStatus.value);
+      if (status != 0) {
+        return status;
+      }
+      // 同为未开播：最近播过的排前面（没有时间的排在最后）
+      var ta = int.tryParse(a.lastLiveTime ?? "0") ?? 0;
+      var tb = int.tryParse(b.lastLiveTime ?? "0") ?? 0;
+      return tb.compareTo(ta);
+    });
     liveList.assignAll(followList.where((x) => x.liveStatus.value == 2));
     notLiveList.assignAll(followList.where((x) => x.liveStatus.value == 1));
     _updatedListController.add(0);

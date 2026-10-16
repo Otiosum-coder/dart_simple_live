@@ -25,11 +25,16 @@ class DouyinAccountService extends GetxService {
     site.cookie = cookie;
   }
 
-  void setCookie(String cookie) {
-    this.cookie = cookie;
+  void setCookie(String rawCookie) {
+    // 归一化：只填了 ttwid 的值就补上字段名；填的是完整 Cookie（含 = 或 ;）就原样保存
+    var value = rawCookie.trim();
+    if (value.isNotEmpty && !value.contains("=")) {
+      value = "ttwid=$value";
+    }
+    this.cookie = value;
     LocalStorageService.instance
-        .setValue(LocalStorageService.kDouyinCookie, cookie);
-    hasCookie.value = cookie.isNotEmpty;
+        .setValue(LocalStorageService.kDouyinCookie, value);
+    hasCookie.value = value.isNotEmpty;
     setSite();
   }
 

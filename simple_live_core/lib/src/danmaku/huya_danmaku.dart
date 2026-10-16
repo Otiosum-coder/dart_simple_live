@@ -105,6 +105,14 @@ class HuyaDanmaku implements LiveDanmaku {
   }
 
   @override
+  bool get canSendDanmaku => false;
+
+  @override
+  Future<String?> sendDanmaku(String message) async {
+    return "当前平台暂不支持发送弹幕";
+  }
+
+  @override
   Future stop() async {
     onMessage = null;
     onClose = null;

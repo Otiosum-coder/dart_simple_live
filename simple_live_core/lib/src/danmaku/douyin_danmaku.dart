@@ -6,6 +6,7 @@ import 'package:simple_live_core/src/common/web_socket_util.dart';
 import 'package:simple_live_core/src/scripts/douyin_sign.dart';
 
 import 'proto/douyin.pb.dart';
+import 'douyin_emoji_assets.dart';
 
 class DouyinDanmakuArgs {
   final String webRid;
@@ -152,6 +153,16 @@ class DouyinDanmaku implements LiveDanmaku {
 
   void unPackWebcastChatMessage(List<int> payload) {
     var chatMessage = ChatMessage.fromBuffer(payload);
+    // RTF 图文片段（表情是 image 片段）；拿不到就按 [xxx] token 走本地表情图兜底
+    final spans = _extractRtfSpans(chatMessage);
+    if (spans.isEmpty) {
+      _appendTextWithEmojiFallback(spans, chatMessage.content);
+    }
+    final imageUrls = spans
+        .where((item) => item.isImage)
+        .map((item) => item.imageUrl!.trim())
+        .toSet()
+        .toList();
     onMessage?.call(
       LiveMessage(
         type: LiveMessageType.chat,
@@ -162,8 +173,93 @@ class DouyinDanmaku implements LiveDanmaku {
         //     : LiveMessageColor.numberToColor(color),
         message: chatMessage.content,
         userName: chatMessage.user.nickName,
+        imageUrls: imageUrls.isEmpty ? null : imageUrls,
+        spans: spans.isEmpty ? null : spans,
       ),
     );
+  }
+
+  /// 解析 RTF 富文本里的图片/文字片段
+  List<LiveMessageSpan> _extractRtfSpans(ChatMessage chatMessage) {
+    final spans = <LiveMessageSpan>[];
+    if (!chatMessage.hasRtfContent()) {
+      return spans;
+    }
+    for (final piece in chatMessage.rtfContent.piecesList) {
+      if (piece.hasImageValue() && piece.imageValue.hasImage()) {
+        final imageUrl = _extractImageUrl(piece.imageValue.image);
+        if (imageUrl != null) {
+          spans.add(LiveMessageSpan.image(imageUrl));
+          continue;
+        }
+        final fallback = _extractImageFallbackText(piece.imageValue.image);
+        if (fallback != null) {
+          _appendTextWithEmojiFallback(spans, fallback);
+        }
+      }
+      if (piece.stringValue.trim().isNotEmpty) {
+        _appendTextWithEmojiFallback(spans, piece.stringValue);
+      }
+      if (piece.hasPatternRefValue()) {
+        final pattern = piece.patternRefValue.defaultPattern.trim();
+        if (pattern.isNotEmpty) {
+          _appendTextWithEmojiFallback(spans, pattern);
+        }
+      }
+    }
+    return spans;
+  }
+
+  /// 文本按 [xxx] 切分，能查到本地表情图就替换成图片片段
+  void _appendTextWithEmojiFallback(List<LiveMessageSpan> spans, String text) {
+    if (text.isEmpty) {
+      return;
+    }
+    var start = 0;
+    for (final match in RegExp(r'\[[^\[\]]{1,16}\]').allMatches(text)) {
+      final token = match.group(0);
+      if (token == null) {
+        continue;
+      }
+      final asset = douyinEmojiAssets[token];
+      if (asset == null) {
+        continue;
+      }
+      if (match.start > start) {
+        spans.add(LiveMessageSpan.text(text.substring(start, match.start)));
+      }
+      spans.add(LiveMessageSpan.image(asset));
+      start = match.end;
+    }
+    if (start < text.length) {
+      spans.add(LiveMessageSpan.text(text.substring(start)));
+    }
+  }
+
+  String? _extractImageUrl(Image image) {
+    for (final url in image.urlListList) {
+      final value = url.trim();
+      if (value.startsWith('http://') || value.startsWith('https://')) {
+        return value;
+      }
+    }
+    final openWebUrl = image.openWebUrl.trim();
+    if (openWebUrl.startsWith('http://') || openWebUrl.startsWith('https://')) {
+      return openWebUrl;
+    }
+    final uri = image.uri.trim();
+    if (uri.startsWith('http://') || uri.startsWith('https://')) {
+      return uri;
+    }
+    return null;
+  }
+
+  String? _extractImageFallbackText(Image image) {
+    final alternativeText = image.content.alternativeText.trim();
+    if (alternativeText.isNotEmpty) {
+      return alternativeText;
+    }
+    return null;
   }
 
   void unPackWebcastRoomUserSeqMessage(List<int> payload) {
@@ -192,6 +288,14 @@ class DouyinDanmaku implements LiveDanmaku {
     var obj = PushFrame();
     obj.payloadType = 'hb';
     webScoketUtils?.sendMessage(obj.writeToBuffer());
+  }
+
+  @override
+  bool get canSendDanmaku => false;
+
+  @override
+  Future<String?> sendDanmaku(String message) async {
+    return "当前平台暂不支持发送弹幕";
   }
 
   @override

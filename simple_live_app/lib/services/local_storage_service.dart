@@ -108,6 +108,15 @@ class LocalStorageService extends GetxService {
   /// 显示SC
   static const String kPlayerShowSuperChat = "PlayerShowSuperChat";
 
+  /// 允许发送弹幕（默认关闭，避免误发）
+  static const String kPlayerSendDanmaku = "PlayerSendDanmaku";
+
+  /// 允许后台播放（Android 用前台服务保活，默认关闭）
+  static const String kPlayerBackgroundPlay = "PlayerBackgroundPlay";
+
+  /// 只播放声音（关闭视频解码，默认关闭）
+  static const String kPlayerAudioOnly = "PlayerAudioOnly";
+
   /// 播放器音量
   static const String kPlayerVolume = "PlayerVolume";
 
@@ -120,6 +129,10 @@ class LocalStorageService extends GetxService {
   /// 抖音cookie
   static const String kDouyinCookie = "DouyinCookie";
 
+  /// 斗鱼cookie（登录后用于解除未登录的画质限制）
+  static const String kDouyuCookie = "DouyuCookie";
+
+
   ///主题色
   static const String kStyleColor = "kStyleColor";
 
@@ -128,6 +141,12 @@ class LocalStorageService extends GetxService {
 
   /// 提示哔哩哔哩登录
   static const String kBilibiliLoginTip = "BilibiliLoginTip";
+
+  /// 提示斗鱼登录（未登录时原画/蓝光4M 会被限制）
+  static const String kDouyuLoginTip = "DouyuLoginTip";
+
+  /// B站关注列表状态缓存（持久化，冷启动即可显示上次直播时间）
+  static const String kBiliFollowingCache = "BiliFollowingCache";
 
   /// 日志记录
   static const String kLogEnable = "LogEnable";
