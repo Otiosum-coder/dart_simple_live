@@ -132,7 +132,7 @@ jobs:
                md5 = "A832EF24B3A6FF97CD2560B5B9D04CD8" },
             @{ n = "ANGLE.7z"
                u = "https://github.com/alexmercerind/flutter-windows-ANGLE-OpenGL-ES/releases/download/v1.0.1/ANGLE.7z"
-               md5 = "E866F13E8D552348058AFAFE869B1ED" }
+               md5 = "E866F13E8D552348058AFAAFE869B1ED" }
           )
           foreach ($it in $items) {
             $out = Join-Path $dir $it.n
@@ -144,7 +144,8 @@ jobs:
               if ((Test-Path $out) -and ((Get-FileHash $out -Algorithm MD5).Hash -eq $it.md5)) { break }
               Start-Sleep -Seconds 3
             }
-            if (-not ((Test-Path $out) -and ((Get-FileHash $out -Algorithm MD5).Hash -eq $it.md5))) { throw "$($it.n) 下载或校验失败" }
+            $actual = if (Test-Path $out) { (Get-FileHash $out -Algorithm MD5).Hash } else { "文件不存在" }
+            if ($actual -ne $it.md5) { throw "$($it.n) 校验失败：期望 $($it.md5)，实际 $actual" }
             Write-Output "$($it.n) 下载完成并校验通过"
           }
 
