@@ -91,10 +91,17 @@ jobs:
   # ------------------------------------------------------------- Windows EXE
   build-windows:
     if: ${{ inputs.build_windows }}
-    runs-on: windows-latest
+    # 固定到 windows-2022（VS 2022，与本地一致）：windows-latest 已升级到 VS 18/MSVC 14.51，
+    # 把 <experimental/coroutine> 从警告变成硬错误，permission_handler_windows 等插件会编译失败
+    runs-on: windows-2022
     env:
-      # 插件源码里有中文注释，非 UTF-8 代码页下 /WX 会把 C4819 升级成 C2220 编译失败
-      CL: /utf-8
+      # 1) 插件源码里有中文注释，非 UTF-8 代码页下 /WX 会把 C4819 升级成 C2220 编译失败
+      # 2) GitHub 的 windows-latest 已升级到 VS 18（MSVC 14.51），它把 <experimental/coroutine>
+      #    从警告升级为硬错误 C2338（STL1011）；permission_handler_windows 等插件仍在用它，
+      #    官方给出的兼容开关就是下面这个宏
+      CL: /utf-8 /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
+      # 双保险：CMake 会读取 CXXFLAGS 并并入 CMAKE_CXX_FLAGS
+      CXXFLAGS: /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
     steps:
       - uses: actions/checkout@v4
 
