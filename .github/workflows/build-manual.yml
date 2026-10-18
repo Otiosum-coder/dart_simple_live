@@ -1,7 +1,15 @@
 name: build-manual
 
-# 手动触发的打包流水线：只产出 EXE(Windows) / APK(Android) 到 Artifacts，不创建 Release。
-# 打正式版（带 Release、含 mac/iOS/Linux）请继续用 publish_app_release.yml（推送 v* tag 触发）。
+# 两种触发方式：
+#   1) 手动触发（workflow_dispatch）：勾选需要的平台，产物只上传到 Artifacts（不创建 Release）
+#   2) 推送 tag（v*）          ：构建全部平台，并自动创建/更新 Release 并上传产物
+#
+# 各平台说明：
+#   Android  ：正式签名（需配置 KEYSTORE_BASE64 等 secrets，否则为 debug 签名）
+#   Windows  ：预下载 mpv/ANGLE 运行库，规避 CI 上下载抖动；固定 windows-2022 规避 VS18 的 C2338
+#   Linux    ：需要系统 libmpv；产物为 zip
+#   macOS    ：arm64 产物（macos-latest），未公证，首次打开需右键 → 打开
+#   iOS      ：未签名 ipa，需用 AltStore / Sideloadly 等工具自签安装
 on:
   workflow_dispatch:
     inputs:
@@ -17,11 +25,25 @@ on:
         description: "构建 Linux (zip)"
         type: boolean
         default: false
+      build_macos:
+        description: "构建 macOS (arm64 zip)"
+        type: boolean
+        default: false
+      build_ios:
+        description: "构建 iOS（未签名 ipa）"
+        type: boolean
+        default: false
+  push:
+    tags: ["v*"]
+
+# 打 tag 时需要创建 Release 并上传产物
+permissions:
+  contents: write
 
 jobs:
   # ---------------------------------------------------------------- Android APK
   build-apk:
-    if: ${{ inputs.build_apk }}
+    if: ${{ github.event_name == 'push' || inputs.build_apk }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -78,27 +100,37 @@ jobs:
           cd simple_live_app
           flutter build apk --release --split-per-abi
 
-      - name: 上传 APK
+      - name: 规范化产物名
+        run: |
+          cd simple_live_app/build/app/outputs/flutter-apk
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            cp "app-$abi-release.apk" "SimpleLive-${{ steps.version.outputs.VERSION }}-$abi.apk"
+          done
+
+      - name: 上传 APK（Artifacts）
         uses: actions/upload-artifact@v4
         with:
           name: apk-${{ steps.version.outputs.VERSION }}
-          path: |
-            simple_live_app/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
-            simple_live_app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-            simple_live_app/build/app/outputs/flutter-apk/app-x86_64-release.apk
+          path: simple_live_app/build/app/outputs/flutter-apk/SimpleLive-*.apk
           if-no-files-found: error
+
+      - name: 上传到 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || gh release create "${GITHUB_REF_NAME}" --generate-notes --title "${GITHUB_REF_NAME}" || true
+          gh release upload "${GITHUB_REF_NAME}" simple_live_app/build/app/outputs/flutter-apk/SimpleLive-*.apk --clobber
 
   # ------------------------------------------------------------- Windows EXE
   build-windows:
-    if: ${{ inputs.build_windows }}
+    if: ${{ github.event_name == 'push' || inputs.build_windows }}
     # 固定到 windows-2022（VS 2022，与本地一致）：windows-latest 已升级到 VS 18/MSVC 14.51，
     # 把 <experimental/coroutine> 从警告变成硬错误，permission_handler_windows 等插件会编译失败
     runs-on: windows-2022
     env:
       # 1) 插件源码里有中文注释，非 UTF-8 代码页下 /WX 会把 C4819 升级成 C2220 编译失败
-      # 2) GitHub 的 windows-latest 已升级到 VS 18（MSVC 14.51），它把 <experimental/coroutine>
-      #    从警告升级为硬错误 C2338（STL1011）；permission_handler_windows 等插件仍在用它，
-      #    官方给出的兼容开关就是下面这个宏
+      # 2) 兼容 VS18 对 experimental/coroutine 的硬错误（官方给的开关）
       CL: /utf-8 /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
       # 双保险：CMake 会读取 CXXFLAGS 并并入 CMAKE_CXX_FLAGS
       CXXFLAGS: /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
@@ -178,16 +210,26 @@ jobs:
           Compress-Archive -Path "$src/*" -DestinationPath $zip -Force
           Get-Item $zip | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
 
-      - name: 上传 EXE
+      - name: 上传 Windows（Artifacts）
         uses: actions/upload-artifact@v4
         with:
           name: windows-exe-${{ steps.version.outputs.VERSION }}
           path: SimpleLive-*-windows-x64.zip
           if-no-files-found: error
 
+      - name: 上传到 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${env:GITHUB_REF_NAME}"
+          gh release view $tag 2>$null | Out-Null; if ($LASTEXITCODE -ne 0) { gh release create $tag --generate-notes --title $tag }
+          gh release upload $tag (Get-ChildItem "SimpleLive-*-windows-x64.zip").FullName --clobber
+
   # ---------------------------------------------------------------- Linux
   build-linux:
-    if: ${{ inputs.build_linux }}
+    if: ${{ github.event_name == 'push' || inputs.build_linux }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -228,9 +270,121 @@ jobs:
           cd simple_live_app/build/linux/x64/release
           zip -r "SimpleLive-${{ steps.version.outputs.VERSION }}-linux-x64.zip" bundle
 
-      - name: 上传 Linux
+      - name: 上传 Linux（Artifacts）
         uses: actions/upload-artifact@v4
         with:
           name: linux-${{ steps.version.outputs.VERSION }}
           path: simple_live_app/build/linux/x64/release/*.zip
           if-no-files-found: error
+
+      - name: 上传到 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || gh release create "${GITHUB_REF_NAME}" --generate-notes --title "${GITHUB_REF_NAME}" || true
+          gh release upload "${GITHUB_REF_NAME}" simple_live_app/build/linux/x64/release/*.zip --clobber
+
+  # ---------------------------------------------------------------- macOS
+  build-macos:
+    if: ${{ github.event_name == 'push' || inputs.build_macos }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 读取版本号
+        id: version
+        shell: bash
+        run: |
+          V=$(grep -m1 '^version:' simple_live_app/pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
+          echo "VERSION=${V:-dev}" >> "$GITHUB_OUTPUT"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.38.x"
+          cache: true
+
+      - name: 打开 macOS 桌面支持
+        run: flutter config --enable-macos-desktop
+
+      - name: 拉依赖
+        run: |
+          cd simple_live_app
+          flutter pub get
+
+      - name: 构建 macOS
+        run: |
+          cd simple_live_app
+          flutter build macos --release
+
+      - name: 打包为 zip（-y 保留符号链接，否则 .app 会损坏）
+        run: |
+          cd simple_live_app/build/macos/Build/Products/Release
+          zip -q -r -y "SimpleLive-${{ steps.version.outputs.VERSION }}-macos-arm64.zip" *.app
+
+      - name: 上传 macOS（Artifacts）
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ steps.version.outputs.VERSION }}
+          path: simple_live_app/build/macos/Build/Products/Release/*.zip
+          if-no-files-found: error
+
+      - name: 上传到 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || gh release create "${GITHUB_REF_NAME}" --generate-notes --title "${GITHUB_REF_NAME}" || true
+          gh release upload "${GITHUB_REF_NAME}" simple_live_app/build/macos/Build/Products/Release/*.zip --clobber
+
+  # ---------------------------------------------------------------- iOS
+  build-ios:
+    if: ${{ github.event_name == 'push' || inputs.build_ios }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 读取版本号
+        id: version
+        shell: bash
+        run: |
+          V=$(grep -m1 '^version:' simple_live_app/pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
+          echo "VERSION=${V:-dev}" >> "$GITHUB_OUTPUT"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.38.x"
+          cache: true
+
+      - name: 拉依赖
+        run: |
+          cd simple_live_app
+          flutter pub get
+
+      - name: 构建 iOS（不签名）
+        run: |
+          cd simple_live_app
+          flutter build ios --release --no-codesign
+
+      - name: 打包为未签名 ipa
+        run: |
+          cd simple_live_app/build/ios/iphoneos
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R Runner.app Payload/
+          zip -q -r -y "SimpleLive-${{ steps.version.outputs.VERSION }}-ios-no-sign.ipa" Payload
+
+      - name: 上传 iOS（Artifacts）
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-${{ steps.version.outputs.VERSION }}
+          path: simple_live_app/build/ios/iphoneos/*.ipa
+          if-no-files-found: error
+
+      - name: 上传到 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || gh release create "${GITHUB_REF_NAME}" --generate-notes --title "${GITHUB_REF_NAME}" || true
+          gh release upload "${GITHUB_REF_NAME}" simple_live_app/build/ios/iphoneos/*.ipa --clobber

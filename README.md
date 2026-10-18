@@ -52,15 +52,25 @@
 
 ## 客户端
 
-- [x] Android
-- [x] Windows
-- [ ] iOS / macOS / Linux / Android TV（原项目支持，本版本未验证）
+- [x] Android（已验证）
+- [x] Windows（已验证）
+- [x] Linux（CI 构建，未广泛实机验证）
+- [ ] iOS / macOS / Android TV（暂未提供构建）
 
 ## 下载
 
-**普通用户**：直接下载打包好的安装包即可使用 ——
-Android 安装 APK；Windows 下载 ZIP 后解压，运行 `simple_live_app.exe`
-（整个文件夹需一起保留）。
+前往 **[Releases](https://github.com/Otiosum-coder/dart_simple_live/releases)** 页面下载最新版本：
+
+| 平台 | 文件 | 说明 |
+| --- | --- | --- |
+| **Android**（大多数手机） | `SimpleLive-x.y.z-arm64-v8a.apk` | 64 位 ARM，绝大多数手机选这个 |
+| Android（老设备） | `SimpleLive-x.y.z-armeabi-v7a.apk` | 32 位 ARM |
+| Android（模拟器） | `SimpleLive-x.y.z-x86_64.apk` | x86 设备 / 模拟器 |
+| **Windows** | `SimpleLive-x.y.z-windows-x64.zip` | 解压后运行 `simple_live_app.exe`，**整个文件夹需一起保留** |
+| **Linux** | `SimpleLive-x.y.z-linux-x64.zip` | 解压后运行 `bundle/simple_live_app` |
+
+> APK 使用正式签名，可直接覆盖安装升级，无需卸载旧版本。
+> Linux 版本由 CI 构建，尚未经过广泛实机验证，遇到问题欢迎提 issue。
 
 ## 自行编译
 
@@ -76,6 +86,10 @@ flutter build apk --release --split-per-abi
 # Windows（插件源码含中文注释，需指定 UTF-8，否则部分环境会编译失败）
 set CL=/utf-8
 flutter build windows --release
+
+# Linux（需要系统依赖）
+sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libasound2-dev libmpv-dev
+flutter build linux --release
 ```
 
 ## 项目结构
