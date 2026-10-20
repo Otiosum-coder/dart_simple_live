@@ -94,6 +94,9 @@ class DouyinDanmaku implements LiveDanmaku {
     var url = "$uri&signature=$sign";
     var backupUrl = url.replaceAll("webcast3-ws-web-lq", "webcast5-ws-web-lf");
     print(url);
+    // 重连/刷新时会再次调用 start()：必须先关闭旧连接，
+    // 否则旧 socket 仍在接收消息 → 聊天列表和滚动弹幕都会重复出现
+    webScoketUtils?.close();
     webScoketUtils = WebScoketUtils(
       url: url,
       backupUrl: backupUrl,

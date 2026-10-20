@@ -193,16 +193,27 @@ class HuyaSite implements LiveSite {
     if (playUserAgent != null) {
       return playUserAgent!;
     }
-    try {
-      var result = await HttpClient.instance.getJson(
-        "https://github.iill.moe/xiaoyaocz/dart_simple_live/master/assets/play_config.json",
-        queryParameters: {
-          "ts": DateTime.now().millisecondsSinceEpoch,
-        },
-      );
-      playUserAgent = json.decode(result)['huya']['user_agent'];
-    } catch (e) {
-      CoreLog.error(e);
+    // 优先从自己的仓库取（jsdelivr CDN），失败再回退到上游地址。
+    // 这样上游仓库有变动/删除时虎牙播放不受影响。
+    const configUrls = [
+      "https://cdn.jsdelivr.net/gh/Otiosum-coder/dart_simple_live@main/assets/play_config.json",
+      "https://github.iill.moe/xiaoyaocz/dart_simple_live/master/assets/play_config.json",
+    ];
+    for (final configUrl in configUrls) {
+      try {
+        var result = await HttpClient.instance.getJson(
+          configUrl,
+          queryParameters: {
+            "ts": DateTime.now().millisecondsSinceEpoch,
+          },
+        );
+        playUserAgent = json.decode(result)['huya']['user_agent'];
+        if (playUserAgent != null && playUserAgent!.isNotEmpty) {
+          break;
+        }
+      } catch (e) {
+        CoreLog.error(e);
+      }
     }
     return playUserAgent ?? HYSDK_UA;
   }

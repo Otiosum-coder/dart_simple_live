@@ -59,6 +59,9 @@ class BiliBiliDanmaku implements LiveDanmaku {
   @override
   Future start(dynamic args) async {
     danmakuArgs = args as BiliBiliDanmakuArgs;
+    // 重连/刷新时会再次调用 start()：必须先关闭旧连接，
+    // 否则旧 socket 仍在接收消息 → 聊天列表和滚动弹幕都会重复出现
+    webScoketUtils?.close();
     webScoketUtils = WebScoketUtils(
       url: "wss://${args.serverHost}/sub",
       heartBeatTime: heartbeatTime,

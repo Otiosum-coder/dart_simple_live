@@ -147,11 +147,32 @@ class DouyuSite implements LiveSite {
     return LiveCategoryResult(hasMore: hasMore, items: items);
   }
 
+  /// 重新生成取流签名参数。
+  ///
+  /// 斗鱼的取流参数（[LiveRoomDetail.data]）是「swf_api/homeH5Enc 的 crptext + 当前时间戳」
+  /// 算出来的签名，带有效期。过期后 getH5Play 仍然返回 200，但拿到的地址被 CDN 连上就断
+  /// （日志表现为 Stream ends @ 0~1MB，然后无限重连）——
+  /// 所以切线路、切画质、断流重连这些「重新取流」的时机，都必须用新参数。
+  Future<String> _freshPlayArgs(String roomId, String fallback) async {
+    try {
+      var jsEncResult = await HttpClient.instance.getText(
+        "https://www.douyu.com/swf_api/homeH5Enc?rids=$roomId",
+        queryParameters: {},
+        header: requestHeaders(referer: "https://www.douyu.com/$roomId"),
+      );
+      var crptext = json.decode(jsEncResult)["data"]["room$roomId"].toString();
+      return DouyuSign.getSign(crptext, roomId);
+    } catch (_) {
+      // 拿不到新参数就退回旧的（至少还能试一次）
+      return fallback;
+    }
+  }
+
   @override
   Future<List<LivePlayQuality>> getPlayQualites({
     required LiveRoomDetail detail,
   }) async {
-    var data = detail.data.toString();
+    var data = await _freshPlayArgs(detail.roomId, detail.data.toString());
     data += "&cdn=&rate=-1&ver=Douyu_223061205&iar=1&ive=1&hevc=0&fa=0";
     List<LivePlayQuality> qualities = [];
     var result = await HttpClient.instance.postJson(
@@ -192,16 +213,21 @@ class DouyuSite implements LiveSite {
     required LiveRoomDetail detail,
     required LivePlayQuality quality,
   }) async {
-    var args = detail.data.toString();
+    // 关键：每次取流都重新生成签名参数，避免用几分钟前过期的旧签名
+    var args = await _freshPlayArgs(detail.roomId, detail.data.toString());
     var data = quality.data as DouyuPlayData;
 
-    List<String> urls = [];
-    for (var item in data.cdns) {
-      var url = await getPlayUrl(detail.roomId, args, data.rate, item);
-      if (url.isNotEmpty) {
-        urls.add(url);
+    // 并发请求各 CDN 的取流地址。
+    // 串行时每个请求最多等 20 秒，网络/代理一挂就要等 1 分钟以上（界面表现为"突然没线路了"）；
+    // 并发后整体最多 20 秒。失败的那条直接跳过，不影响其它线路。
+    var results = await Future.wait(data.cdns.map((item) async {
+      try {
+        return await getPlayUrl(detail.roomId, args, data.rate, item);
+      } catch (_) {
+        return "";
       }
-    }
+    }));
+    List<String> urls = results.where((e) => e.isNotEmpty).toList();
     // 追加一条「音频线路」：斗鱼 CDN 支持 &only-audio=1，只下发音频
     // （实测 4 秒下载量 2749KB → 63KB，约 5.5Mbps → 126kbps）
     int? audioLineIndex;

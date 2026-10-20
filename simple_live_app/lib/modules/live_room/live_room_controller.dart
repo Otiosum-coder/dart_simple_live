@@ -168,6 +168,14 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       // 界面据此判断"确实在播"：避免切线路失败时误显示未开播卡片
       playerPlaying.value = playing;
       if (playing) {
+        // 只有稳定播放超过 20 秒才重置断流退避计数：
+        // 否则「播 1 秒就断」也会把计数清零 → 永远用最短延迟重连 → 高频重连被 CDN 限流
+        if (_lastOpenTime != null &&
+            DateTime.now().difference(_lastOpenTime!) >
+                const Duration(seconds: 20)) {
+          _streamEndReconnects = 0;
+        }
+        _reconnectToken += 1;
         syncBackgroundPlayback();
       } else {
         BackgroundPlayback.stop();
@@ -361,7 +369,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       };
       for (var entry in options.entries) {
         try {
-          await platform.setProperty(entry.key, entry.value);
+          // 加超时：mpv 处于异常状态时 setProperty 可能一直不返回
+          await platform
+              .setProperty(entry.key, entry.value)
+              .timeout(const Duration(seconds: 2));
         } catch (e) {
           Log.logPrint('设置 mpv 参数 ${entry.key} 失败：$e');
         }
@@ -595,17 +606,22 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     return qualityLevel;
   }
 
-  void getPlayUrl() async {
-    playUrls.clear();
+  Future<void> getPlayUrl() async {
+    if (detail.value == null || qualites.isEmpty || currentQuality < 0) {
+      return;
+    }
     playUrlEmpty.value = false;
     currentQualityInfo.value = qualites[currentQuality].quality;
-    currentLineInfo.value = "";
-    currentLineIndex = -1;
+    // 关键：先拿到结果再覆盖状态。
+    // 以前是「先 playUrls.clear() + 清空线路名」，取流一旦失败就直接 return，
+    // 界面会变成「没有线路」且播放彻底停住 —— 也就是用户看到的"突然没线路了"。
+    final previousLines = playUrls.toList();
     try {
       var playUrl = await site.liveSite.getPlayUrls(
           detail: detail.value!, quality: qualites[currentQuality]);
       if (playUrl.urls.isEmpty) {
         SmartDialog.showToast("无法读取播放地址");
+        await replayWithPrevious(previousLines);
         return;
       }
       playUrls.value = playUrl.urls;
@@ -616,6 +632,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       playUrlEmpty.value = e is CoreError && e.statusCode == 403;
       Log.logPrint(e);
       SmartDialog.showToast(e is CoreError ? e.message : "无法读取播放地址");
+      // 取流失败也不要让播放死掉：退回上一次拿到的地址继续播
+      await replayWithPrevious(previousLines);
       return;
     }
     // 保留用户当前选择的线路；只有下标失效（首次加载 / 线路列表变了）时才自动选：
@@ -627,7 +645,23 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     currentLineInfo.value = lineLabel(currentLineIndex);
     //重置错误次数
     mediaErrorRetryCount = 0;
-    initPlaylist();
+    await initPlaylist();
+  }
+
+  /// 取流失败时的兜底：用上一次的地址继续播，避免播放直接死掉
+  Future<void> replayWithPrevious(List<String> previousLines) async {
+    if (playUrls.isEmpty && previousLines.isNotEmpty) {
+      playUrls.value = previousLines;
+    }
+    if (playUrls.isEmpty) {
+      currentLineInfo.value = "";
+      return;
+    }
+    if (currentLineIndex < 0 || currentLineIndex >= playUrls.length) {
+      currentLineIndex = 0;
+    }
+    currentLineInfo.value = lineLabel(currentLineIndex);
+    await initPlaylist();
   }
 
   /// [fromUser] = 用户在界面上主动点的线路（内部自动跳线路时传 false）
@@ -642,17 +676,23 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     setPlayer();
   }
 
-  void initPlaylist() async {
+  Future<void> initPlaylist() async {
     currentLineInfo.value = lineLabel(currentLineIndex);
     errorMsg.value = "";
 
-    final mediaList = playUrls.map((url) {
-      var finalUrl = url;
-      if (AppSettingsController.instance.playerForceHttps.value) {
-        finalUrl = finalUrl.replaceAll("http://", "https://");
-      }
-      return Media(finalUrl, httpHeaders: playHeaders);
-    }).toList();
+    // 只把「当前线路」放进播放列表。
+    // 以前把全部线路塞进 Playlist，mpv 在流结束/出错时会自动播放下一条 ——
+    // 表现就是「没人操作却一直在切线路」（日志里每隔几秒换一个 CDN）。
+    if (playUrls.isEmpty ||
+        currentLineIndex < 0 ||
+        currentLineIndex >= playUrls.length) {
+      return;
+    }
+    var currentUrl = playUrls[currentLineIndex];
+    if (AppSettingsController.instance.playerForceHttps.value) {
+      currentUrl = currentUrl.replaceAll("http://", "https://");
+    }
+    final mediaList = [Media(currentUrl, httpHeaders: playHeaders)];
 
     // 初始化播放器并设置 ao 参数
     await initializePlayer();
@@ -661,48 +701,112 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     // 这里给足缓冲（在 open 之前设置才生效），不影响起播速度
     await applyNetworkBuffering();
 
-    await player.open(Playlist(mediaList));
+    // 加超时：播放器异常/代理挂住时 open 可能一直不返回，导致界面卡死在"没有线路"
+    try {
+      await player
+          .open(Playlist(mediaList))
+          .timeout(const Duration(seconds: 12));
+    } catch (e) {
+      Log.logPrint(e);
+      SmartDialog.showToast("起播超时，正在重试");
+    }
 
     // 每次重新拉流后都要重新应用「只播放声音」（切线路/清晰度会重置）
     await applyAudioOnly();
+    _lastOpenTime = DateTime.now();
   }
 
-  void setPlayer() async {
-    currentLineInfo.value = lineLabel(currentLineIndex);
-    errorMsg.value = "";
-
-    await player.jump(currentLineIndex);
+  /// 用当前线路重新起播（播放列表里只有当前线路一条，所以直接重建播放列表）
+  Future<void> setPlayer() async {
+    await initPlaylist();
   }
+
+  /// 直播流被正常断开后的重连计数（与 mediaError 的失败计数分开）
+  int _streamEndReconnects = 0;
+
+  /// 重连看门狗令牌：播放恢复或发起新重连时自增，让旧的看门狗失效
+  int _reconnectToken = 0;
+
+  /// 最近一次起播时间：用于判断"刚连上就被重置"（说明这条 CDN 不通，应立刻换线）
+  DateTime? _lastOpenTime;
+
+  /// 线路切换熔断记录：1 分钟内切换超过 6 次就停下来等网络恢复，
+  /// 否则会出现「切线路→起播→立刻被重置→再切」的自激循环（实测每秒切好几次）
+  final List<DateTime> _lineSwitchTimes = [];
+
+  bool allowLineSwitch() {
+    var now = DateTime.now();
+    _lineSwitchTimes.removeWhere((t) => now.difference(t).inSeconds > 60);
+    return _lineSwitchTimes.length < 6;
+  }
+
+  void recordLineSwitch() => _lineSwitchTimes.add(DateTime.now());
+
+  /// 重连互斥：防止 mediaEnd / mediaError / 看门狗 并发重复打开播放器
+  bool _replaying = false;
 
   @override
   void mediaEnd() async {
     super.mediaEnd();
-    if (mediaErrorRetryCount < 4) {
-      Log.d("播放结束，尝试第${mediaErrorRetryCount + 1}次刷新");
-      // 递增退避：桌面端偶发卡顿/缓冲时不要立刻判定这条线路不可用而跳线路
-      if (mediaErrorRetryCount >= 1) {
-        await Future.delayed(Duration(seconds: mediaErrorRetryCount));
+    // 直播流被 CDN 正常断开（斗鱼大约每 300MB 断一次）或播放地址已过期。
+    // 网页播放器每次都会重新向平台要一个「新地址」再连，这里照做：
+    // 复用旧地址会因为 wsAuth 失效只拿到几十 KB，最后被误判成「线路坏了」而切线路。
+    final delays = [1, 2, 3, 5, 8, 10, 15];
+    var attempt = _streamEndReconnects;
+    if (attempt >= delays.length) {
+      attempt = delays.length - 1;
+    }
+    _streamEndReconnects += 1;
+    Log.d("播放结束，${delays[attempt]}s 后重新取流并重连（第 $_streamEndReconnects 次）");
+    await Future.delayed(Duration(seconds: delays[attempt]));
+    await refreshUrlAndReplay();
+
+    // 看门狗：20 秒后仍未恢复播放，说明重连卡住/失败 → 换下一条线路或再试一次，
+    // 避免停在"没有线路"的死状态。播放恢复/发起新重连时令牌变化，它自动失效。
+    // 注意：要和重连互斥、熔断器保持一致，否则会和正在进行的重连打架。
+    final token = ++_reconnectToken;
+    Future.delayed(const Duration(seconds: 20), () {
+      if (token != _reconnectToken || playerPlaying.value || _replaying) {
+        return;
       }
-      mediaErrorRetryCount += 1;
-      //刷新一次
-      setPlayer();
+      if (!allowLineSwitch()) {
+        Log.d("看门狗：1 分钟内切线路过多，暂停切换，20 秒后再试当前线路");
+        Future.delayed(const Duration(seconds: 20), () => setPlayer());
+        return;
+      }
+      Log.d("重连后 20 秒仍未播放，尝试切换线路");
+      if (playUrls.length > 1 && currentLineIndex < playUrls.length - 1) {
+        recordLineSwitch();
+        changePlayLine(currentLineIndex + 1);
+      } else {
+        setPlayer();
+      }
+    });
+  }
+
+  /// 重新向平台请求播放地址，并用**当前线路**重连
+  Future<void> refreshUrlAndReplay() async {
+    // 互斥：避免多个失败回调并发取流/打开播放器，导致自己取消自己
+    if (_replaying) {
+      Log.d("上一次重连还没结束，跳过本次");
       return;
     }
-
-    Log.d("播放结束");
-    if (playUrls.length - 1 == currentLineIndex) {
-      // 关键：不要在这里把 liveStatus 置为 false。
-      // liveStatus 只应来自房间详情接口（detail.status）——
-      // 网络波动/线路异常会让所有线路都播放失败，但那不等于主播下播；
-      // 置 false 会把"暂无开播记录"卡片压在正常直播画面上。
-      // 正确做法：重新查询一次房间详情，由接口告诉我们是否真的下播。
-      errorMsg.value = "播放中断，正在重新获取房间状态";
-      SmartDialog.showToast("播放中断，正在重新获取房间状态");
-      loadData();
-    } else {
-      changePlayLine(currentLineIndex + 1);
-
-      //setPlayer();
+    _replaying = true;
+    try {
+      if (detail.value == null || qualites.isEmpty || currentQuality < 0) {
+        await setPlayer();
+        return;
+      }
+      try {
+        // getPlayUrl() 内部会重新请求取流接口并调用 initPlaylist()，
+        // 同时保留当前线路（只有下标失效时才自动选）
+        await getPlayUrl();
+      } catch (e) {
+        Log.logPrint(e);
+        await setPlayer();
+      }
+    } finally {
+      _replaying = false;
     }
   }
 
@@ -720,24 +824,49 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   @override
   void mediaError(String error) async {
     super.mediaEnd();
-    if (mediaErrorRetryCount < 4) {
-      Log.d("播放失败，尝试第${mediaErrorRetryCount + 1}次刷新");
-      // 递增退避：桌面端偶发卡顿/缓冲时不要立刻判定这条线路不可用而跳线路
-      if (mediaErrorRetryCount >= 1) {
-        await Future.delayed(Duration(seconds: mediaErrorRetryCount));
+
+    // 刚起播 3 秒内就被重置：大概率这条 CDN 在当前网络下不可用，
+    // 不再对它重试（每秒一次的高频重连还会被 CDN 当成异常流量），直接换下一条线路
+    final justOpened = _lastOpenTime != null &&
+        DateTime.now().difference(_lastOpenTime!) < const Duration(seconds: 3);
+    if (justOpened) {
+      mediaErrorRetryCount = 0;
+      if (!allowLineSwitch()) {
+        // 熔断：短时间内已切太多次，停止切线路，等网络恢复后再试
+        Log.d("1 分钟内切换线路过于频繁，暂停切换，10 秒后重试当前线路");
+        errorMsg.value = "网络不稳定，正在等待恢复…";
+        SmartDialog.showToast("网络不稳定，正在等待恢复");
+        await Future.delayed(const Duration(seconds: 10));
+        await setPlayer();
+        return;
       }
-      mediaErrorRetryCount += 1;
-      //刷新一次
-      setPlayer();
+      Log.d("起播后 3 秒内即被重置，直接切换线路");
+      recordLineSwitch();
+      if (playUrls.length - 1 <= currentLineIndex) {
+        errorMsg.value = "播放失败";
+        SmartDialog.showToast("播放失败:$error");
+      } else {
+        changePlayLine(currentLineIndex + 1);
+      }
       return;
     }
 
-    if (playUrls.length - 1 == currentLineIndex) {
+    if (mediaErrorRetryCount < 4) {
+      Log.d("播放失败，尝试第${mediaErrorRetryCount + 1}次刷新");
+      // 重连间隔从 2 秒起（1 秒一次的高频重连容易被 CDN 限流）
+      await Future.delayed(Duration(seconds: (mediaErrorRetryCount + 1) * 2));
+      mediaErrorRetryCount += 1;
+      // 重试时也重新取一次地址（旧 token 可能已失效）
+      await refreshUrlAndReplay();
+      return;
+    }
+
+    // 重试与新地址都失败：重置计数，作为最后手段切到下一条线路
+    mediaErrorRetryCount = 0;
+    if (playUrls.length - 1 <= currentLineIndex) {
       errorMsg.value = "播放失败";
       SmartDialog.showToast("播放失败:$error");
     } else {
-      //currentLineIndex += 1;
-      //setPlayer();
       changePlayLine(currentLineIndex + 1);
     }
   }

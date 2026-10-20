@@ -1,7 +1,7 @@
 {
-  "version": "1.11.1",
-  "version_num": 11101,
-  "version_desc": "- 版本更新",
+  "version": "1.11.5",
+  "version_num": 11105,
+  "version_desc": "- 修复斗鱼取流参数过期导致的断流后无限重连\n- 修复重复弹幕（弹幕连接未关闭）\n- 断流后自动刷新地址重连，新增切换线路熔断\n- 新增 macOS / iOS 构建",
   "prerelease": false,
-  "download_url": "https://github.com/xiaoyaocz/dart_simple_live/releases"
+  "download_url": "https://github.com/Otiosum-coder/dart_simple_live/releases"
 }
