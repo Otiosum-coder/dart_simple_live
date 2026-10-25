@@ -102,6 +102,8 @@ class AppSettingsController extends GetxController {
     // 发送弹幕默认关闭：必须从存储恢复，否则重启后又变回关闭/开启不一致
     playerSendDanmaku.value = LocalStorageService.instance
         .getValue(LocalStorageService.kPlayerSendDanmaku, false);
+    danmakuSendKickWarn.value = LocalStorageService.instance
+        .getValue("danmaku_send_kick_warn", true);
     playerBackgroundPlay.value = LocalStorageService.instance
         .getValue(LocalStorageService.kPlayerBackgroundPlay, false);
     playerAudioOnly.value = LocalStorageService.instance
@@ -390,6 +392,14 @@ class AppSettingsController extends GetxController {
     playershowSuperChat.value = e;
     LocalStorageService.instance
         .setValue(LocalStorageService.kPlayerShowSuperChat, e);
+  }
+
+  /// 斗鱼发送弹幕前是否提示「会接管账号的弹幕会话」（用户可勾"不再提示"关闭）
+  var danmakuSendKickWarn = true.obs;
+  void setDanmakuSendKickWarn(bool e) {
+    danmakuSendKickWarn.value = e;
+    LocalStorageService.instance
+        .setValue("danmaku_send_kick_warn", e);
   }
 
   /// 允许发送弹幕：默认关闭，用户在设置里手动打开

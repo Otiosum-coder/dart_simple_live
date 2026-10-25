@@ -52,6 +52,17 @@ class DouyuSite implements LiveSite {
     return "";
   }
 
+  /// 设备 id：优先 acf_did，回退 dy_did，再回退 acf_devid
+  String _resolveDevid() {
+    for (var key in ["acf_did", "dy_did", "acf_devid"]) {
+      var value = _cookieValue(key);
+      if (value.isNotEmpty) {
+        return value;
+      }
+    }
+    return "";
+  }
+
   /// 斗鱼 2026-09-21 起对未登录用户限制最高画质：原画 / 蓝光4M 只能看 10 分钟。
   /// 登录态必须透传到各接口，尤其是 getH5Play —— 服务端按登录态决定下发的清晰度与 token。
   static const String kUserAgent =
@@ -337,14 +348,21 @@ class DouyuSite implements LiveSite {
       introduction: roomInfo["show_details"].toString(),
       notice: "",
       status: isLive,
-      // 发言需要 uid（+devid）：斗鱼靠它们识别身份，从登录 cookie 里取
+      // 发弹幕需要 uid + devid + jwt + ltkid + stk（2026-10 抓包实证），
+      // 全部从登录 cookie 里取；缺任何一个都发不出去
       danmakuData: DouyuDanmakuArgs(
         roomId: roomInfo["room_id"].toString(),
         uid: _cookieValue("acf_uid"),
-        devid: _cookieValue("acf_devid"),
+        devid: _resolveDevid(),
         nickname: _decodeCookieValue(_cookieValue("acf_nickname")),
         avatar: _decodeCookieValue(_cookieValue("acf_avatar")),
         username: _cookieValue("acf_username"),
+        jwt: _decodeCookieValue(_cookieValue("acf_dmjwt_token")),
+        ltkid: _decodeCookieValue(_cookieValue("acf_ltkid")),
+        biz: _cookieValue("acf_biz"),
+        stk: _decodeCookieValue(_cookieValue("acf_stk")),
+        // 完整 cookie 用于发送连接的握手头
+        cookie: cookie,
       ),
       data: DouyuSign.getSign(crptext, roomInfo["room_id"].toString()),
       url: "https://www.douyu.com/$roomId",

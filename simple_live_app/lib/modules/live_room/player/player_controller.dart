@@ -21,6 +21,7 @@ import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:simple_live_app/widgets/danmaku_input_bar.dart';
 
 mixin PlayerMixin {
   GlobalKey<VideoState> globalPlayerKey = GlobalKey<VideoState>();
@@ -128,14 +129,14 @@ mixin PlayerStateMixin on PlayerMixin {
 
   /// 隐藏控制器
   void hideControls() {
-    showControlsState.value = false;
+    if (!DanmakuInputBar.typing) showControlsState.value = false;
     hideControlsTimer?.cancel();
   }
 
   void setLockState() {
     lockControlsState.value = !lockControlsState.value;
     if (lockControlsState.value) {
-      showControlsState.value = false;
+      if (!DanmakuInputBar.typing) showControlsState.value = false;
     } else {
       showControlsState.value = true;
     }
@@ -444,7 +445,7 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     }
     danmakuController?.clear();
     //关闭控制器
-    showControlsState.value = false;
+    if (!DanmakuInputBar.typing) showControlsState.value = false;
 
     //监听事件
     var width = player.state.width ?? 0;

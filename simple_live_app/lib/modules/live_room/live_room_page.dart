@@ -144,7 +144,13 @@ class LiveRoomPage extends GetView<LiveRoomController> {
         ),
         buildUserProfile(context),
         buildMessageArea(),
-        buildBottomActions(context),
+        // 开启「发送弹幕」后进入新布局：底部功能行取消
+        // （关注 → 主播名右侧；刷新/分享 → 右上角菜单）
+        Obx(
+          () => AppSettingsController.instance.playerSendDanmaku.value
+              ? const SizedBox.shrink()
+              : buildBottomActions(context),
+        ),
       ],
     );
   }
@@ -239,6 +245,29 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                 onPressed: controller.copyPlayUrl,
                 icon: const Icon(Remix.file_copy_line),
                 label: const Text("复制播放直链"),
+              ),
+              // 新布局：输入框放在底栏右侧（原三个按钮的位置）
+              Obx(
+                () => !AppSettingsController.instance.playerSendDanmaku.value
+                    ? const SizedBox.shrink()
+                    : SizedBox(
+                        // 与上方聊天面板严格同宽
+                        width: (MediaQuery.sizeOf(context).width * 0.36)
+                            .clamp(200.0, 300.0),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).cardColor,
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          child: DanmakuInputBar(
+                            controller: controller,
+                            overlay: true,
+                          ),
+                        ),
+                      ),
               ),
             ],
           ),
@@ -531,10 +560,16 @@ class LiveRoomPage extends GetView<LiveRoomController> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    controller.detail.value?.userName ?? "",
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          controller.detail.value?.userName ?? "",
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
                   ),
                   AppStyle.vGap4,
                   Row(
@@ -557,22 +592,66 @@ class LiveRoomPage extends GetView<LiveRoomController> {
               ),
             ),
             AppStyle.hGap12,
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  Remix.fire_fill,
-                  size: 20,
-                  color: Colors.orange,
-                ),
-                AppStyle.hGap4,
-                Text(
-                  Utils.onlineToString(
-                    controller.detail.value?.online ?? 0,
+            // 右侧：热度 + （开启发送弹幕后）热度下方的矩形关注按钮
+            Obx(
+              () => Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Remix.fire_fill,
+                        size: 18,
+                        color: Colors.orange,
+                      ),
+                      AppStyle.hGap4,
+                      Text(
+                        Utils.onlineToString(
+                          controller.detail.value?.online ?? 0,
+                        ),
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    ],
                   ),
-                  style: const TextStyle(fontSize: 14),
-                ),
-              ],
+                  if (AppSettingsController
+                      .instance.playerSendDanmaku.value) ...[
+                    const SizedBox(height: 6),
+                    InkWell(
+                      borderRadius: AppStyle.radius8,
+                      onTap: controller.followed.value
+                          ? controller.removeFollowUser
+                          : controller.followUser,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          borderRadius: AppStyle.radius8,
+                          color: Colors.transparent,
+                          border: Border.all(
+                            color: controller.followed.value
+                                ? Colors.grey.withAlpha(90)
+                                : Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                        child: Text(
+                          controller.followed.value ? "已关注" : "关注",
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: controller.followed.value
+                                ? Colors.grey
+                                : Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ),
           ],
         ),
@@ -647,11 +726,15 @@ class LiveRoomPage extends GetView<LiveRoomController> {
   Widget buildDanmakuInput() {
     return Obx(
       () {
-        var enabled = AppSettingsController.instance.playerSendDanmaku.value &&
-            controller.canSendDanmaku.value;
+        var enabled = AppSettingsController.instance.playerSendDanmaku.value;
         if (!enabled) {
           return const SizedBox.shrink();
         }
+        // 桌面/横屏：输入框在底栏右侧，聊天页不重复
+        if (MediaQuery.of(Get.context!).orientation != Orientation.portrait) {
+          return const SizedBox.shrink();
+        }
+
         return DanmakuInputBar(controller: controller);
       },
     );
@@ -712,6 +795,41 @@ class LiveRoomPage extends GetView<LiveRoomController> {
   Widget buildChatTab() {
     return Column(
       children: [
+        // 弹幕会话被其他设备接管（斗鱼单会话限制）时提示，并可跳转重新登录
+        Obx(
+          () => !controller.danmakuSessionLost.value
+              ? const SizedBox.shrink()
+              : Container(
+                  width: double.infinity,
+                  color: Colors.orange.withAlpha(38),
+                  padding: const EdgeInsets.only(left: 12, right: 4, top: 2, bottom: 2),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.warning_amber_rounded,
+                        size: 18,
+                        color: Colors.orange,
+                      ),
+                      AppStyle.hGap8,
+                      const Expanded(
+                        child: Text(
+                          "弹幕会话已被其他设备接管，当前只能观看",
+                          style: TextStyle(fontSize: 12),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          Get.toNamed("/settings/account");
+                        },
+                        child: const Text(
+                          "重新登录斗鱼",
+                          style: TextStyle(fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+        ),
         Expanded(
           child: Obx(
             () => Stack(
@@ -1054,6 +1172,26 @@ class LiveRoomPage extends GetView<LiveRoomController> {
           shrinkWrap: true,
           padding: EdgeInsets.zero,
           children: [
+            // 新布局下底部功能行取消，刷新/分享收到这里（只在开启发送弹幕时出现）
+            if (AppSettingsController.instance.playerSendDanmaku.value) ...[
+              ListTile(
+                leading: const Icon(Remix.refresh_line),
+                title: const Text("刷新直播间"),
+                onTap: () {
+                  Get.back();
+                  controller.refreshRoom();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Remix.share_line),
+                title: const Text("分享"),
+                onTap: () {
+                  Get.back();
+                  controller.share();
+                },
+              ),
+              const Divider(height: 1),
+            ],
             // 后台播放：必须跑前台服务，代价是通知栏有一条低重要度通知
             Obx(
               () => SwitchListTile(

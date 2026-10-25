@@ -335,6 +335,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   /// 全屏下的弹幕输入条是否显示（按回车或点控制条按钮唤起）
   var showDanmakuInput = false.obs;
 
+  /// 正在输入弹幕（打字时控制条不要自动隐藏）
+  bool danmakuTyping = false;
+
+  /// 弹幕输入草稿：横竖屏切换/全屏进出时输入框会重建，靠它保留未发送内容
+  var danmakuDraft = "".obs;
+
   /// 后台播放用的播放状态订阅
   StreamSubscription<bool>? _bgPlayingSubscription;
 
@@ -413,6 +419,60 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   /// 上次发送弹幕的时间（本地节流，避免撞平台风控）
   DateTime? _lastSendTime;
 
+  /// 弹幕会话被其他设备接管（斗鱼单会话限制）：显示状态条引导重新登录
+  var danmakuSessionLost = false.obs;
+
+  /// 斗鱼发送前提示：发送会接管账号的弹幕会话，可能断开其他设备的弹幕
+  /// 返回 true = 继续发送；false = 用户取消
+  Future<bool> _confirmDouyuSession() async {
+    var noMore = false;
+    var result = await SmartDialog.show<bool>(
+      clickMaskDismiss: false,
+      builder: (_) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text("发送弹幕会接管账号的弹幕会话"),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "其他设备（浏览器 / 官方客户端）的弹幕连接会被断开，直到它们点「重试」。",
+              ),
+              AppStyle.vGap8,
+              Row(
+                children: [
+                  Checkbox(
+                    value: noMore,
+                    onChanged: (v) {
+                      setState(() => noMore = v ?? false);
+                    },
+                  ),
+                  const Expanded(
+                    child: Text("不再提示（可在「设置 - 播放设置」中恢复）"),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => SmartDialog.dismiss(result: false),
+              child: const Text("取消"),
+            ),
+            TextButton(
+              onPressed: () => SmartDialog.dismiss(result: true),
+              child: const Text("继续发送"),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (noMore) {
+      AppSettingsController.instance.setDanmakuSendKickWarn(false);
+    }
+    return result ?? false;
+  }
+
   /// 发送弹幕：成功返回 null，失败返回可展示的原因
   Future<String?> sendDanmaku(String text) async {
     var message = text.trim();
@@ -436,9 +496,24 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (last != null && DateTime.now().difference(last).inSeconds < 2) {
       return "发送太快了，请稍后再试";
     }
+    // 斗鱼：发送会抢会话，先确认（用户可勾"不再提示"）
+    if (site.id == Constant.kDouyu &&
+        AppSettingsController.instance.danmakuSendKickWarn.value) {
+      var go = await _confirmDouyuSession();
+      if (!go) {
+        // 空字符串 = 用户主动取消，输入框保留内容、不弹错误
+        return "";
+      }
+    }
     var error = await liveDanmaku.sendDanmaku(message);
     if (error == null) {
       _lastSendTime = DateTime.now();
+      danmakuSessionLost.value = false;
+    } else if (error.contains("4206") ||
+        error.contains("4205") ||
+        error.contains("已过期") ||
+        error.contains("被接管")) {
+      danmakuSessionLost.value = true;
     }
     return error;
   }
@@ -751,7 +826,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     // 直播流被 CDN 正常断开（斗鱼大约每 300MB 断一次）或播放地址已过期。
     // 网页播放器每次都会重新向平台要一个「新地址」再连，这里照做：
     // 复用旧地址会因为 wsAuth 失效只拿到几十 KB，最后被误判成「线路坏了」而切线路。
-    final delays = [1, 2, 3, 5, 8, 10, 15];
+    final delays = [0, 1, 2, 3, 5, 8, 15];
     var attempt = _streamEndReconnects;
     if (attempt >= delays.length) {
       attempt = delays.length - 1;

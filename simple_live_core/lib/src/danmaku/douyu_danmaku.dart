@@ -1,9 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:simple_live_core/simple_live_core.dart';
+import 'package:simple_live_core/src/common/http_client.dart' as core_http;
 import 'package:simple_live_core/src/common/web_socket_util.dart';
 
 import '../common/binary_writer.dart';
@@ -27,6 +28,22 @@ class DouyuDanmakuArgs {
   /// 聊天用户名（cookie 的 acf_username，形如 qq_xxxxxx）
   /// 网页版 loginreq 会带上它，缺了可能被当成未认证会话
   final String username;
+
+  /// 发弹幕令牌：cookie 的 acf_dmjwt_token（只有约 7 天有效期）
+  final String jwt;
+
+  /// cookie 的 acf_ltkid
+  final String ltkid;
+
+  /// cookie 的 acf_biz（通常为 1）
+  final String biz;
+
+  /// cookie 的 acf_stk
+  final String stk;
+
+  /// 完整 cookie：发送连接握手时带上，让斗鱼认为是同一个浏览器会话
+  /// （否则会触发「账号在另一地点登录」，把用户的浏览器/客户端踢下线）
+  final String cookie;
   DouyuDanmakuArgs({
     required this.roomId,
     this.uid = "",
@@ -34,7 +51,54 @@ class DouyuDanmakuArgs {
     this.nickname = "",
     this.avatar = "",
     this.username = "",
+    this.jwt = "",
+    this.ltkid = "",
+    this.biz = "",
+    this.stk = "",
+    this.cookie = "",
   });
+
+  /// 是否具备发弹幕条件（抓包实证：uid + devid + jwt + ltkid + stk 缺一不可）
+  bool get canSend =>
+      uid.isNotEmpty &&
+      devid.isNotEmpty &&
+      jwt.isNotEmpty &&
+      ltkid.isNotEmpty &&
+      stk.isNotEmpty;
+
+  /// 发弹幕缺失的凭证字段（用于提示和日志诊断）
+  List<String> get missingSendFields => [
+        if (uid.isEmpty) "acf_uid",
+        if (devid.isEmpty) "acf_did/dy_did",
+        if (jwt.isEmpty) "acf_dmjwt_token",
+        if (ltkid.isEmpty) "acf_ltkid",
+        if (stk.isEmpty) "acf_stk",
+      ];
+
+  /// 诊断用：只打印各字段长度，不泄露内容
+  String get sendReadyDesc =>
+      "uid=${uid.length} devid=${devid.length} jwt=${jwt.length} "
+      "ltkid=${ltkid.length} stk=${stk.length} biz=${biz.length}";
+
+  /// dmjwt 是否已过期（解析 JWT payload 的 exp；解析失败按未过期处理）
+  bool get jwtExpired {
+    if (jwt.isEmpty) return false;
+    try {
+      var parts = jwt.split('.');
+      if (parts.length < 2) return false;
+      var payload = parts[1].replaceAll('-', '+').replaceAll('_', '/');
+      while (payload.length % 4 != 0) {
+        payload += '=';
+      }
+      var payloadJson = json.decode(utf8.decode(base64.decode(payload)));
+      var exp = payloadJson['exp'];
+      if (exp is! num) return false;
+      return DateTime.fromMillisecondsSinceEpoch(exp.toInt() * 1000)
+          .isBefore(DateTime.now());
+    } catch (_) {
+      return false;
+    }
+  }
   @override
   String toString() {
     return json.encode({
@@ -60,8 +124,6 @@ class DouyuDanmaku implements LiveDanmaku {
   WebScoketUtils? webScoketUtils;
   // 注意：页面可能在 start() 之前就读 canSendDanmaku，所以不能是 late
   DouyuDanmakuArgs danmakuArgs = DouyuDanmakuArgs(roomId: "");
-  /// 是否已收到 loginres（登录成功），而不是「连接已建立」
-  bool _ready = false;
   Completer<void>? _loginCompleter;
 
   @override
@@ -69,6 +131,8 @@ class DouyuDanmaku implements LiveDanmaku {
     danmakuArgs = args is DouyuDanmakuArgs
         ? args
         : DouyuDanmakuArgs(roomId: args.toString());
+    CoreLog.i("斗鱼弹幕：发送能力 canSend=${danmakuArgs.canSend} "
+        "${danmakuArgs.sendReadyDesc} 缺字段=${danmakuArgs.missingSendFields}");
     // 重连/刷新时会再次调用 start()：必须先关闭旧连接，
     // 否则旧 socket 仍在接收消息 → 聊天列表和滚动弹幕都会重复出现
     webScoketUtils?.close();
@@ -86,7 +150,6 @@ class DouyuDanmaku implements LiveDanmaku {
         heartbeat();
       },
       onReconnect: () {
-        _ready = false;
         onClose?.call("与服务器断开连接，正在尝试重连");
       },
       onClose: (e) {
@@ -130,42 +193,218 @@ class DouyuDanmaku implements LiveDanmaku {
     webScoketUtils?.sendMessage(data);
   }
 
-  // 结论（2026-10 全面实测）：独立连接无法在斗鱼发言，服务器把 chatmsg 静默丢弃。
-  // 已逐项排除（每一项都对应一次真实探测，不是推测）：
-  //   1. 包体：与网页抓包逐字节同构（包类型 690 + type@=chatmsg + rid/uid/nn/txt/cid/
-  //      ic/level/sahf/cst/bnn/bl/brid/hc/lk/dms/pdg/pdk/ext/ufs/if）
-  //   2. 账号：改用与网页完全相同的账号（loginres 回显同一 userid），已绑手机
-  //      (acf_phonestatus=1)、未禁言 (is_illegal=0)、房间有发言权限
-  //   3. 鉴权字段：username / uid / ver=20220825 / aver / ct / dfl 全部带上；
-  //      stt=dmjwt / token=dmjwt / dmjwt_token cookie / 握手 Cookie+Origin 都试过
-  //   4. 分组：joingroup gid=1（网页发送连接用的就是 gid=1）与 gid=-9999 都试过；
-  //      也复刻了网页的 sub/mt@=dfansrk、sub/mt@=fansnum 订阅帧
-  //   5. 包类型：689 与 690 都试过；长度按 UTF-8 字节数（已修正 String.length 的缺陷）
-  //   6. 测量：双连接旁观者方案（旁观连接 6 秒能收到房间内别人的弹幕，
-  //      测试期间共 9 条），但我们发出的两条（ASCII + 中文）旁观者一条都收不到
-  //   7. 旁证：最流行的第三方斗鱼工具（DouyuEx-RL）的"循环发送弹幕"实现是
-  //      ChatSend-txt.value=文本 → ChatSend-button.click()，即驱动网页输入框，
-  //      它们同样没有复刻协议 —— 说明发送依赖页面会话上下文（网页 JS 读 dmjwt_token
-  //      后在混淆代码里完成认证），第三方独立连接拿不到。
-  // 因此斗鱼保持「只读弹幕」。若日后一定要发，只能内嵌 WebView 驱动网页（DouyuEx 思路）。
+  // ============================================================ 发送弹幕
+  // 2026-10 抓包实证：
+  //   接收：wss://danmuproxy.douyu.com:8506  包类型 690，type@=chatmsg（广播）
+  //   发送：wss://wsproxy.douyu.com:6674     包类型 689，type@=chatmessage
+  //   回执：同一条 wsproxy 连接返回 type@=chatres/res@=0
+  // 三个关键点（都实测验证过）：
+  //   1. 发送必须用「独立连接」——往接收连接发 chatmsg 会被服务端静默丢弃
+  //   2. 发送连接登录要带 jwt（cookie acf_dmjwt_token）+ ltkid/biz/stk + vk 签名
+  //   3. 心跳必须带签名（getEncryption 取密钥 + nonce/its），否则会被踢下线
+  /// 是否显示输入框：斗鱼始终允许输入，
+  /// 凭证不全时在 sendDanmaku 里给出「缺少哪些 cookie 字段」的明确提示，
+  /// 比直接隐藏输入框更利于用户发现问题。
   @override
-  bool get canSendDanmaku => false;
+  bool get canSendDanmaku => true;
 
-  Completer<String?>? _sendCompleter;
-  String? _sendingText;
+  /// 发送网关（独立连接，与接收连接互不影响）
+  String senderUrl = "wss://wsproxy.douyu.com:6674/";
+  WebScoketUtils? _senderSocket;
+  bool _senderReady = false;
+  Completer<void>? _senderLoginCompleter;
+  Completer<String?>? _chatresCompleter;
+  DateTime? _lastSendAt;
+
+  /// 登录 vk 签名的固定盐值（网页 JS 常量，不是账号密钥）
+  static const String _vkSecret = r"r5*^5;}2#${XF[h+;'./.Q'1;,-]f'p[";
+
+  /// 心跳签名密钥（getEncryption 下发，nonce/its 用一次即作废）
+  String? _hbKey;
+  String _hbKeyVer = "1.1";
+  String? _hbRand;
+  int _hbEncTime = 1;
+  String? _hbNonce;
+  int _hbIts = 0;
+
+  int get _nowSec => DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
   /// 斗鱼 STT 转义：@ 和 / 是分隔符，必须先转义
   String scapeSlashAt(String str) {
     return str.replaceAll("@", "@A").replaceAll("/", "@S");
   }
 
-  String _randomHex(int length) {
-    var random = Random();
-    var buffer = StringBuffer();
-    for (var i = 0; i < length; i++) {
-      buffer.write(random.nextInt(16).toRadixString(16));
+  /// 建立发送连接并登录：成功返回 null，失败返回错误文案
+  Future<String?> _ensureSender() async {
+    if (danmakuArgs.jwtExpired) {
+      return "斗鱼登录已过期（dmjwt 失效），请重新登录斗鱼";
     }
-    return buffer.toString();
+    if (_senderReady && _senderSocket?.status == SocketStatus.connected) {
+      return null;
+    }
+    if (_senderSocket == null) {
+      _senderSocket = WebScoketUtils(
+        url: senderUrl,
+        heartBeatTime: 30 * 1000,
+        // 带上浏览器的 Cookie/Origin/UA：让斗鱼把这条连接视为同一会话，
+        // 而不是"另一个地点登录"（从而尽量避免把用户的浏览器/客户端踢下线）
+        headers: {
+          "Origin": "https://www.douyu.com",
+          "Referer": "https://www.douyu.com/${danmakuArgs.roomId}",
+          "User-Agent": DouyuSite.kUserAgent,
+          if (danmakuArgs.cookie.isNotEmpty) "Cookie": danmakuArgs.cookie,
+        },
+        onMessage: (e) => _decodeSenderMessage(e),
+        onReady: () => _loginSender(),
+        onHeartBeat: () => _sendSenderHeartbeat(),
+        onReconnect: () => _senderReady = false,
+        onClose: (e) => _senderReady = false,
+      );
+      // 发送连接不做自动重连：被踢后只在用户再次发送时才重新登录，
+      // 避免"自动重连→再踢对方→对方重试→再踢我们"的互踢循环
+      _senderSocket?.maxReconnectTime = 0;
+    }
+    var login = _senderLoginCompleter = Completer<void>();
+    _senderReady = false;
+    _senderSocket?.connect();
+    try {
+      await login.future.timeout(const Duration(seconds: 8));
+    } on TimeoutException {
+      return "斗鱼发送连接登录超时，请稍后重试";
+    } finally {
+      if (identical(_senderLoginCompleter, login)) {
+        _senderLoginCompleter = null;
+      }
+    }
+    if (!_senderReady) {
+      return "斗鱼发送连接登录失败：登录态可能已过期，请重新登录斗鱼";
+    }
+    return null;
+  }
+
+  /// 发送连接登录（loginreq + vk 防重放签名）
+  void _loginSender() {
+    var args = danmakuArgs;
+    var rt = _nowSec.toString();
+    var vk = md5.convert(utf8.encode(rt + _vkSecret + args.devid)).toString();
+    _senderSocket?.sendMessage(serializeDouyu(
+      "type@=loginreq/roomid@=${args.roomId}/dfl@=/username@=${args.username}"
+      "/password@=/ltkid@=${args.ltkid}/biz@=${args.biz}/stk@=${args.stk}"
+      "/devid@=${args.devid}/ct@=0/pt@=2/cvr@=0/tvr@=7/apd@=/jwt@=${args.jwt}"
+      "/rt@=$rt/vk@=$vk/ver@=20220825/aver@=218101901/dmbt@=chrome/dmbv@=155/",
+    ));
+  }
+
+  /// 取心跳签名密钥（getEncryption）
+  Future<void> _loadHeartbeatKey() async {
+    try {
+      var res = await core_http.HttpClient.instance.getJson(
+        "https://www.douyu.com/wgapi/livenc/liveweb/websec/getEncryption",
+        queryParameters: {"did": danmakuArgs.devid},
+        header: {
+          "referer": "https://www.douyu.com/${danmakuArgs.roomId}",
+          "user-agent": DouyuSite.kUserAgent,
+        },
+      );
+      var data = (res is Map && res["data"] is Map) ? res["data"] : res;
+      if (data is! Map) {
+        return;
+      }
+      _hbRand = data["rand_str"]?.toString();
+      _hbEncTime = int.tryParse(data["enc_time"]?.toString() ?? "1") ?? 1;
+      var heartbeat = data["cpp"] is Map ? data["cpp"]["heartbeat"] : null;
+      if (heartbeat is Map) {
+        _hbKey = heartbeat["key"]?.toString();
+        var keyVer = heartbeat["key_ver"]?.toString() ?? "";
+        if (keyVer.isNotEmpty) {
+          _hbKeyVer = keyVer;
+        }
+      }
+    } catch (e) {
+      CoreLog.error(e);
+    }
+  }
+
+  /// 发送连接心跳：必须带签名，否则会被服务端踢掉
+  Future<void> _sendSenderHeartbeat() async {
+    if (_hbKey == null) {
+      await _loadHeartbeatKey();
+    }
+    var key = _hbKey;
+    if (key == null || key.isEmpty) {
+      return;
+    }
+    var tick = _nowSec.toString();
+    var digest = _hbNonce ?? _hbRand ?? "";
+    var times = _hbNonce != null ? _hbIts : _hbEncTime;
+    if (times <= 0) {
+      times = 1;
+    }
+    for (var i = 0; i < times; i++) {
+      digest = md5.convert(utf8.encode(digest + key)).toString();
+    }
+    var sig = md5
+        .convert(utf8.encode(
+            digest + key + danmakuArgs.roomId + danmakuArgs.devid + tick))
+        .toString();
+    _senderSocket?.sendMessage(serializeDouyu(
+      "type@=keeplive/vbw@=0/cdn@=/tick@=$tick/kd@=/alg_ver@=1.0/key_ver=$_hbKeyVer/sig@=$sig/",
+    ));
+    _hbNonce = null;
+    _hbIts = 0;
+  }
+
+  /// 解析发送连接的下行包（loginres / keeplive / chatres / error）
+  void _decodeSenderMessage(List<int> data) {
+    try {
+      var result = deserializeDouyu(data);
+      if (result == null) {
+        return;
+      }
+      var jsonData = sttToJObject(result);
+      var type = jsonData["type"]?.toString();
+      if (type == "loginres") {
+        var userid = jsonData["userid"]?.toString() ?? "";
+        _senderReady = userid.isNotEmpty && userid != "0";
+        CoreLog.i("斗鱼发送：wsproxy loginres userid=${userid.length} "
+            "ready=$_senderReady sessionid=${(jsonData["sessionid"]?.toString() ?? "").length}");
+        var login = _senderLoginCompleter;
+        if (login != null && !login.isCompleted) {
+          login.complete();
+        }
+        return;
+      }
+      if (type == "keeplive") {
+        // 服务端心跳回包带新的 nonce / its，用一次即作废
+        _hbNonce = jsonData["nonce"]?.toString();
+        _hbIts = int.tryParse(jsonData["its"]?.toString() ?? "0") ?? 0;
+        return;
+      }
+      if (type == "chatres") {
+        var res = int.tryParse(jsonData["res"]?.toString() ?? "") ?? -1;
+        CoreLog.i("斗鱼发送：收到 chatres res=$res");
+        _chatresCompleter?.complete(res == 0 ? null : "发送失败（res=$res）");
+        _chatresCompleter = null;
+        return;
+      }
+      if (type == "error") {
+        var code = jsonData["code"]?.toString() ?? "";
+        CoreLog.i("斗鱼发送：wsproxy error code=$code");
+        var msg = (code == "4206" || code == "4205")
+            ? "斗鱼登录已过期，请重新登录斗鱼"
+            : "斗鱼发送连接出错${code.isEmpty ? "" : "（$code）"}";
+        _senderReady = false;
+        var login = _senderLoginCompleter;
+        if (login != null && !login.isCompleted) {
+          login.complete();
+        }
+        _chatresCompleter?.complete(msg);
+        _chatresCompleter = null;
+        return;
+      }
+    } catch (e) {
+      CoreLog.error(e);
+    }
   }
 
   @override
@@ -174,41 +413,45 @@ class DouyuDanmaku implements LiveDanmaku {
     if (text.isEmpty) {
       return "弹幕内容不能为空";
     }
-    if (danmakuArgs.uid.isEmpty) {
-      return "请先登录斗鱼";
+    if (!danmakuArgs.canSend) {
+      CoreLog.i("斗鱼发送：凭证不全，缺失=${danmakuArgs.missingSendFields}");
+      if (danmakuArgs.jwtExpired) {
+        return "斗鱼登录已过期（dmjwt 失效），请重新登录斗鱼";
+      }
+      return "斗鱼登录态不完整（缺少 ${danmakuArgs.missingSendFields.join("、")}），"
+          "请在账号管理里重新登录斗鱼，或手动粘贴浏览器里完整的 Cookie";
     }
-    if (_sendCompleter != null) {
+    if (_chatresCompleter != null) {
       return "上一条弹幕还在发送中，请稍后再试";
     }
-    var completer = Completer<String?>();
-    _sendCompleter = completer;
-    _sendingText = text;
-    // 网页版真实格式（抓包解码得到，2026-10 实测）：
-    //   type@=chatmsg/rid@=房间/uid@=uid/nn@=昵称/txt@=内容/cid@=32位随机hex/
-    //   ic@=头像/level@=等级/sahf@=0/cst@=毫秒时间戳/.../ufs@=1/if@=1/
-    // 注意：不是 chatmessage、不是 receiver/content，上行包类型是 690
-    var body = "type@=chatmsg/rid@=${danmakuArgs.roomId}"
-        "/uid@=${danmakuArgs.uid}"
-        "/nn@=${scapeSlashAt(danmakuArgs.nickname)}"
-        "/txt@=${scapeSlashAt(text)}"
-        "/cid@=${_randomHex(32)}"
-        "/ic@=${scapeSlashAt(danmakuArgs.avatar)}"
-        "/level@=0/sahf@=0/cst@=${DateTime.now().millisecondsSinceEpoch}"
-        "/bnn@=/bl@=0/brid@=0/hc@=/lk@=/dms@=4/pdg@=27/pdk@=75"
-        "/ext@=/ufs@=1/if@=1/";
-    webScoketUtils?.sendMessage(serializeDouyu(body, type: 690));
+    if (_lastSendAt != null &&
+        DateTime.now().difference(_lastSendAt!) < const Duration(seconds: 2)) {
+      return "发送太频繁，请稍后再试";
+    }
+    CoreLog.i("斗鱼发送：开始建立/复用发送连接（room=${danmakuArgs.roomId}）");
+    var senderError = await _ensureSender();
+    if (senderError != null) {
+      CoreLog.i("斗鱼发送：发送连接不可用 → $senderError");
+      return senderError;
+    }
+    CoreLog.i("斗鱼发送：发送连接就绪，开始发送（长度=${text.length}）");
+    var args = danmakuArgs;
+    var completer = _chatresCompleter = Completer<String?>();
+    _lastSendAt = DateTime.now();
+    // 抓包实证的上行帧（包类型 689）：content 放正文，dy/sender 等字段照抄网页
+    var body = "pe@=0/content@=${scapeSlashAt(text)}/col@=0/type@=chatmessage"
+        "/dy@=${args.devid}/sender@=${args.uid}"
+        "/ifs@=0/nc@=0/dat@=0/rev@=0/tts@=$_nowSec/admzq@=0"
+        "/cst@=${DateTime.now().millisecondsSinceEpoch}/";
+    _senderSocket?.sendMessage(serializeDouyu(body));
     try {
-      // 优先用服务器回显确认（斗鱼会把自己的弹幕推回来）
-      return await completer.future.timeout(const Duration(seconds: 4));
+      // 唯一可信的成功判据：同一条 wsproxy 连接回 type@=chatres/res@=0
+      return await completer.future.timeout(const Duration(seconds: 8));
     } on TimeoutException {
-      _sendCompleter = null;
-      _sendingText = null;
-      // 关键：没有可信回执就不能算成功。
-      // 之前这里会本地补一条自己的弹幕并返回成功，导致「只有自己能看到」的假成功。
-      if (!_ready) {
-        return "发送失败：斗鱼弹幕未登录成功（未收到 loginres）";
+      if (identical(_chatresCompleter, completer)) {
+        _chatresCompleter = null;
       }
-      return "未收到服务器回显，无法确认弹幕是否发送成功";
+      return "发送超时：内容可能重复或发送过快，换一条内容再试";
     }
   }
 
@@ -217,6 +460,12 @@ class DouyuDanmaku implements LiveDanmaku {
     onMessage = null;
     onClose = null;
     webScoketUtils?.close();
+    // 发送连接也要一起关，避免残留连接继续重连
+    _senderSocket?.close();
+    _senderSocket = null;
+    _senderReady = false;
+    _senderLoginCompleter = null;
+    _chatresCompleter = null;
   }
 
   void decodeMessage(List<int> data) {
@@ -230,32 +479,14 @@ class DouyuDanmaku implements LiveDanmaku {
       var type = jsonData["type"]?.toString();
       // 登录响应：到这里才算真正登录成功
       if (type == "loginres") {
-        _ready = true;
         var login = _loginCompleter;
         if (login != null && !login.isCompleted) {
           login.complete();
         }
         return;
       }
-      // 发送过程中的错误包（如果有）
-      if (type == "error" && _sendCompleter != null) {
-        var msg = jsonData["msg"]?.toString() ??
-            jsonData["txt"]?.toString() ??
-            "服务器返回错误";
-        _sendCompleter?.complete("发送失败：$msg");
-        _sendCompleter = null;
-        _sendingText = null;
-        return;
-      }
       //斗鱼好像不会返回人气值
       if (type == "chatmsg") {
-        // 自己发的弹幕回显 = 发送成功（斗鱼没有发送回执）
-        var txt = jsonData["txt"]?.toString() ?? "";
-        if (_sendCompleter != null && _sendingText != null && txt == _sendingText) {
-          _sendCompleter?.complete(null);
-          _sendCompleter = null;
-          _sendingText = null;
-        }
         // 屏蔽阴间弹幕
         if (jsonData["dms"] == null) {
           return;

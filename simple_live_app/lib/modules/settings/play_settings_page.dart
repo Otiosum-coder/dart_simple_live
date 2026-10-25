@@ -159,9 +159,20 @@ class PlaySettingsPage extends GetView<AppSettingsController> {
                 Obx(
                   () => SettingsSwitch(
                     title: "允许发送弹幕",
+                    subtitle: "斗鱼 / 哔哩哔哩可用；虎牙、抖音暂不支持",
                     value: controller.playerSendDanmaku.value,
                     onChanged: (e) {
                       controller.setPlayerSendDanmaku(e);
+                    },
+                  ),
+                ),
+                Obx(
+                  () => SettingsSwitch(
+                    title: "斗鱼发送前提示",
+                    subtitle: "提示发送会接管账号弹幕会话，可断开其他设备的弹幕",
+                    value: controller.danmakuSendKickWarn.value,
+                    onChanged: (e) {
+                      controller.setDanmakuSendKickWarn(e);
                     },
                   ),
                 ),

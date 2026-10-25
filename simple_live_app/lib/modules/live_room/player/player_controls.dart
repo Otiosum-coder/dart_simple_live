@@ -301,7 +301,24 @@ Widget buildFullControls(
                       ),
                     ),
                   ),
-                  const Expanded(child: Center()),
+                  Expanded(
+                  child: Obx(
+                    () => !AppSettingsController
+                                .instance.playerSendDanmaku.value ||
+                            !controller.canSendDanmaku.value
+                        ? const Center()
+                        : Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                            ),
+                            child: DanmakuInputBar(
+                              controller: controller,
+                              overlay: true,
+                              compact: true,
+                            ),
+                          ),
+                  ),
+                ),
                   // 发言：全屏下没有常驻输入框，点这里唤起（桌面也可直接按回车）
                   Obx(
                     () {
@@ -311,17 +328,7 @@ Widget buildFullControls(
                       if (!canSend) {
                         return const SizedBox.shrink();
                       }
-                      return IconButton(
-                        onPressed: () {
-                          controller.showDanmakuInput.value =
-                              !controller.showDanmakuInput.value;
-                        },
-                        icon: const Icon(
-                          Remix.chat_3_line,
-                          size: 24,
-                          color: Colors.white,
-                        ),
-                      );
+                      return const SizedBox.shrink();
                     },
                   ),
                   Visibility(
@@ -421,8 +428,6 @@ Widget buildFullControls(
             ),
           ),
         ),
-        // 弹幕输入条放最后：必须在手势层之上，否则鼠标点不中输入框
-        DanmakuInputOverlay(controller: controller),
       ],
     ),
   );
