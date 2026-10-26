@@ -301,16 +301,15 @@ Widget buildFullControls(
                       ),
                     ),
                   ),
-                  Expanded(
+                Expanded(
                   child: Obx(
                     () => !AppSettingsController
                                 .instance.playerSendDanmaku.value ||
-                            !controller.canSendDanmaku.value
+                            !controller.canSendDanmaku.value ||
+                            !(Platform.isAndroid || Platform.isIOS)
                         ? const Center()
                         : Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                            ),
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
                             child: DanmakuInputBar(
                               controller: controller,
                               overlay: true,
@@ -319,18 +318,6 @@ Widget buildFullControls(
                           ),
                   ),
                 ),
-                  // 发言：全屏下没有常驻输入框，点这里唤起（桌面也可直接按回车）
-                  Obx(
-                    () {
-                      var canSend =
-                          AppSettingsController.instance.playerSendDanmaku.value &&
-                              controller.canSendDanmaku.value;
-                      if (!canSend) {
-                        return const SizedBox.shrink();
-                      }
-                      return const SizedBox.shrink();
-                    },
-                  ),
                   Visibility(
                     visible: !Platform.isAndroid && !Platform.isIOS,
                     child: IconButton(
@@ -428,6 +415,7 @@ Widget buildFullControls(
             ),
           ),
         ),
+        DanmakuInputOverlay(controller: controller),
       ],
     ),
   );

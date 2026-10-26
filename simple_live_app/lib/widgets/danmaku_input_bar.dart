@@ -1,4 +1,3 @@
-import 'dart:io';
 
 import 'package:characters/characters.dart';
 import 'package:flutter/material.dart';
@@ -136,7 +135,6 @@ class _DanmakuInputBarState extends State<DanmakuInputBar> {
 
   @override
   Widget build(BuildContext context) {
-    var isDesktop = !Platform.isAndroid && !Platform.isIOS;
     var scheme = Theme.of(context).colorScheme;
     // 平台是否支持发送（虎牙/抖音暂未实现 → 禁用态，布局保持一致）
     var supported = widget.controller.canSendDanmaku.value;
@@ -148,7 +146,7 @@ class _DanmakuInputBarState extends State<DanmakuInputBar> {
       padding: const EdgeInsets.only(left: 16, right: 5),
       decoration: BoxDecoration(
         color: const Color(0xEB15181C),
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
         children: [
@@ -244,7 +242,7 @@ class _DanmakuInputBarState extends State<DanmakuInputBar> {
           padding: const EdgeInsets.only(left: 14, right: 10),
           decoration: BoxDecoration(
             color: const Color(0xFF1E2027),
-            borderRadius: BorderRadius.circular(18),
+            borderRadius: BorderRadius.circular(8),
             border: Border.all(color: Colors.white30),
           ),
           child: Row(

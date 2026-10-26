@@ -29,6 +29,19 @@ class HuyaSite implements LiveSite {
   BaseTarsHttp("http://wup.huya.com", "liveui", headers: requestHeaders);
 
   String? playUserAgent;
+
+  /// 登录后的 Cookie（由 App 层的 HuyaAccountService 注入）
+  ///
+  /// 虎牙未登录也能看全部画质，这里带上登录态主要是为了后续「发送弹幕」等
+  /// 需要身份的接口，以及让房间信息里带上自己的用户信息。
+  String cookie = "";
+
+  /// 带登录态的请求头
+  Map<String, dynamic> get requestHeadersWithCookie => {
+        "user-agent": kUserAgent,
+        if (cookie.isNotEmpty) "cookie": cookie,
+      };
+
   @override
   String id = "huya";
 
@@ -471,9 +484,7 @@ class HuyaSite implements LiveSite {
     var resultText = await HttpClient.instance.getText(
       "https://m.huya.com/$roomId",
       queryParameters: {},
-      header: {
-        "user-agent": kUserAgent,
-      },
+      header: requestHeadersWithCookie,
     );
     var text = RegExp(
             r"window\.HNF_GLOBAL_INIT.=.\{[\s\S]*?\}[\s\S]*?</script>",

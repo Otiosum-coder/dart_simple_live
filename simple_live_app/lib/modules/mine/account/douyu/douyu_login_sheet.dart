@@ -5,7 +5,7 @@ import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/douyu_account_service.dart';
 
-/// 斗鱼登录方式选择：扫码登录 / 手动填写 Cookie
+/// 斗鱼登录方式选择：扫码登录 / Web登录 / 手动填写 Cookie
 ///
 /// 账号管理页和「未登录画质限制」提示都会用到，抽出来避免重复实现。
 void showDouyuLoginSheet() {
@@ -22,6 +22,16 @@ void showDouyuLoginSheet() {
           onTap: () {
             Get.back();
             Get.toNamed(RoutePath.kDouyuQRLogin);
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.account_circle_outlined),
+          title: const Text("Web登录"),
+          subtitle: const Text("账号密码 / 手机验证码登录"),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () {
+            Get.back();
+            Get.toNamed(RoutePath.kDouyuWebLogin);
           },
         ),
         ListTile(

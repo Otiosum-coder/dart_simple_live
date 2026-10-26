@@ -106,17 +106,34 @@ class CategoryListView extends StatelessWidget {
   Widget buildSubCategoryIcon(BuildContext context, LiveSubCategory item) {
     var pic = (item.pic ?? "").trim();
     if (pic.isNotEmpty) {
+      final isLocalGameArtwork = DouyinGameArtwork.isLocalGameArtwork(pic);
       return NetImage(
         pic,
+        fit: isLocalGameArtwork ? BoxFit.contain : BoxFit.cover,
         width: 40,
         height: 40,
         borderRadius: 8,
-        // 抖音分类图的域名常需要 Referer；失败了也不要留破图，回落到语义图标
-        headers: const {"Referer": "https://live.douyin.com/"},
+        // 按图床分站点给 Referer：给 B站图床发抖音的 Referer 会被拒（403）
+        headers: _categoryImageHeaders(pic),
         failedWidget: buildCategoryIconBox(context, item),
       );
     }
     return buildCategoryIconBox(context, item);
+  }
+
+  /// 分类图请求头：不同图床要求不同的 Referer
+  Map<String, String>? _categoryImageHeaders(String url) {
+    if (url.contains("hdslb.com") || url.contains("biliimg.com")) {
+      return {
+        "Referer": "https://live.bilibili.com/",
+        "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      };
+    }
+    if (url.contains("douyin") || url.contains("douyincdn")) {
+      return {"Referer": "https://live.douyin.com/"};
+    }
+    return null;
   }
 
   /// 语义图标兜底（分类图缺失或加载失败时用）
@@ -131,68 +148,14 @@ class CategoryListView extends StatelessWidget {
         color: color.withAlpha(18),
       ),
       child: Icon(
-        categoryIconByName(item.name),
+        Icons.dashboard_customize_rounded,
         size: 22,
         color: color,
       ),
     );
   }
 
-  /// 分类名 → 图标（按关键词匹配，匹配不到给一个通用图标）
-  IconData categoryIconByName(String name) {
-    if (name.contains("游戏") ||
-        name.contains("电竞") ||
-        name.contains("手游") ||
-        name.contains("赛事")) {
-      return Icons.sports_esports_rounded;
-    }
-    if (name.contains("唱") || name.contains("音乐") || name.contains("电台")) {
-      return Icons.music_note_rounded;
-    }
-    if (name.contains("舞") || name.contains("才艺") || name.contains("颜值")) {
-      return Icons.auto_awesome_rounded;
-    }
-    if (name.contains("聊天") || name.contains("交友") || name.contains("情感")) {
-      return Icons.forum_rounded;
-    }
-    if (name.contains("美食") || name.contains("吃")) {
-      return Icons.restaurant_rounded;
-    }
-    if (name.contains("户外") || name.contains("旅行") || name.contains("风景")) {
-      return Icons.landscape_rounded;
-    }
-    if (name.contains("知识") || name.contains("教育") || name.contains("课堂")) {
-      return Icons.school_rounded;
-    }
-    if (name.contains("体育") || name.contains("运动") || name.contains("健身")) {
-      return Icons.sports_basketball_rounded;
-    }
-    if (name.contains("购物") || name.contains("带货") || name.contains("电商")) {
-      return Icons.shopping_bag_rounded;
-    }
-    if (name.contains("二") && name.contains("次")) {
-      return Icons.animation_rounded;
-    }
-    if (name.contains("汽车") || name.contains("车")) {
-      return Icons.directions_car_rounded;
-    }
-    if (name.contains("科技") || name.contains("数码") || name.contains("电脑")) {
-      return Icons.memory_rounded;
-    }
-    if (name.contains("生活") || name.contains("日常")) {
-      return Icons.weekend_rounded;
-    }
-    if (name.contains("娱乐") || name.contains("综艺")) {
-      return Icons.celebration_rounded;
-    }
-    if (name.contains("亲子") || name.contains("萌娃") || name.contains("育儿")) {
-      return Icons.child_care_rounded;
-    }
-    if (name.contains("热门") || name.contains("推荐")) {
-      return Icons.local_fire_department_rounded;
-    }
-    return Icons.live_tv_rounded;
-  }
+
 
   Widget buildShowMore(AppLiveCategory item) {
     return ShadowCard(

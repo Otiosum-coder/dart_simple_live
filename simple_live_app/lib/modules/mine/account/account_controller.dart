@@ -8,8 +8,10 @@ import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
 import 'package:simple_live_app/modules/mine/account/douyu/douyu_login_sheet.dart';
+import 'package:simple_live_app/modules/mine/account/douyin/douyin_login_sheet.dart';
+import 'package:simple_live_app/modules/mine/account/huya/huya_login_sheet.dart';
 import 'package:simple_live_app/services/douyu_account_service.dart';
-import 'package:simple_live_core/simple_live_core.dart';
+import 'package:simple_live_app/services/huya_account_service.dart';
 
 class AccountController extends GetxController {
   void bilibiliTap() async {
@@ -99,85 +101,36 @@ class AccountController extends GetxController {
   }
 
   void douyinTap() async {
-    if (DouyinAccountService.instance.hasCookie.value) {
-      var result = await Utils.showAlertDialog("确定要清除自定义 ttwid 吗？", title: "清除配置");
+    if (DouyinAccountService.instance.logined.value) {
+      var result = await Utils.showAlertDialog("确定要退出抖音账号吗？", title: "退出登录");
       if (result) {
-        DouyinAccountService.instance.clearCookie();
-        SmartDialog.showToast("已清除自定义 ttwid，将使用默认 ttwid");
+        DouyinAccountService.instance.logout();
+        SmartDialog.showToast("已退出抖音账号");
       }
     } else {
-      doDouyinCookieConfig();
+      douyinLogin();
     }
   }
 
-  void doDouyinCookieConfig() {
-    // 原样回填：支持粘贴完整 Cookie，也支持只填 ttwid 的值
-    var controller =
-        TextEditingController(text: DouyinAccountService.instance.cookie);
+  /// 登录方式选择（扫码 / Web / 自定义 ttwid）
+  void douyinLogin() {
+    showDouyinLoginSheet();
+  }
 
-    Get.dialog(
-      AlertDialog(
-        title: const Text("配置抖音 Cookie"),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                "默认已内置有效的 ttwid，可观看所有画质（包括蓝光）。\n如有需要可自定义配置。",
-                style: TextStyle(fontSize: 12, color: Colors.grey),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: controller,
-                maxLines: 3,
-                decoration: const InputDecoration(
-                  hintText: "请粘贴 ttwid 值（留空则使用默认值）",
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextButton.icon(
-                onPressed: () {
-                  // 提取 ttwid 的值部分（去掉 "ttwid=" 前缀）
-                  var defaultValue = DouyinSite.kDefaultCookie;
-                  if (defaultValue.startsWith('ttwid=')) {
-                    defaultValue = defaultValue.substring(6); // 去掉 "ttwid="
-                  }
-                  controller.text = defaultValue;
-                },
-                icon: const Icon(Icons.restore),
-                label: const Text("恢复默认 ttwid"),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Get.back(),
-            child: const Text("取消"),
-          ),
-          TextButton(
-            onPressed: () {
-              var input = controller.text.trim();
-              Get.back();
-              if (input.isEmpty) {
-                DouyinAccountService.instance.clearCookie();
-                SmartDialog.showToast("已清除自定义 Cookie，将使用默认 ttwid");
-              } else {
-                // 如果用户只输入了 ttwid 值，自动添加 "ttwid=" 前缀
-                var cookie = input;
-                if (!input.startsWith('ttwid=')) {
-                  cookie = 'ttwid=$input';
-                }
-                DouyinAccountService.instance.setCookie(cookie);
-                SmartDialog.showToast("ttwid 已保存");
-              }
-            },
-            child: const Text("确定"),
-          ),
-        ],
-      ),
-    );
+  void huyaTap() async {
+    if (HuyaAccountService.instance.logined.value) {
+      var result = await Utils.showAlertDialog("确定要退出虎牙账号吗？", title: "退出登录");
+      if (result) {
+        HuyaAccountService.instance.logout();
+        SmartDialog.showToast("已退出虎牙账号");
+      }
+    } else {
+      huyaLogin();
+    }
+  }
+
+  /// 登录方式选择（扫码 / Web / Cookie）
+  void huyaLogin() {
+    showHuyaLoginSheet();
   }
 }

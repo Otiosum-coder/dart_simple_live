@@ -132,6 +132,12 @@ class LocalStorageService extends GetxService {
   /// 斗鱼cookie（登录后用于解除未登录的画质限制）
   static const String kDouyuCookie = "DouyuCookie";
 
+  /// 虎牙cookie（登录后用于发送弹幕等需要登录态的操作）
+  static const String kHuyaCookie = "HuyaCookie";
+
+  /// 抖音登录cookie（含 sessionid，与「自定义 ttwid」分开存）
+  static const String kDouyinLoginCookie = "DouyinLoginCookie";
+
 
   ///主题色
   static const String kStyleColor = "kStyleColor";

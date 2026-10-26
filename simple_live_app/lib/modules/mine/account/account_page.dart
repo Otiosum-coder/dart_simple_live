@@ -5,6 +5,7 @@ import 'package:simple_live_app/modules/mine/account/account_controller.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
 import 'package:simple_live_app/services/douyu_account_service.dart';
+import 'package:simple_live_app/services/huya_account_service.dart';
 
 class AccountPage extends GetView<AccountController> {
   const AccountPage({Key? key}) : super(key: key);
@@ -20,7 +21,7 @@ class AccountPage extends GetView<AccountController> {
           const Padding(
             padding: AppStyle.edgeInsetsA12,
             child: Text(
-              "哔哩哔哩账号需要登录才能看高清晰度的直播。\n斗鱼自 2026-09-21 起限制未登录用户：原画 / 蓝光4M 只能观看 10 分钟。",
+              "哔哩哔哩账号需要登录才能看高清晰度的直播。\n斗鱼自 2026-09-21 起限制未登录用户：原画 / 蓝光4M 只能观看 10 分钟。\n虎牙、抖音登录后可用于发送弹幕。",
               textAlign: TextAlign.center,
             ),
           ),
@@ -56,16 +57,22 @@ class AccountPage extends GetView<AccountController> {
               onTap: controller.douyuTap,
             ),
           ),
-          ListTile(
-            leading: Image.asset(
-              'assets/images/huya.png',
-              width: 36,
-              height: 36,
+          Obx(
+            () => ListTile(
+              leading: Image.asset(
+                'assets/images/huya.png',
+                width: 36,
+                height: 36,
+              ),
+              title: const Text("虎牙直播"),
+              subtitle: Text(HuyaAccountService.instance.logined.value
+                  ? HuyaAccountService.instance.name.value
+                  : "未登录（发送弹幕需要登录）"),
+              trailing: HuyaAccountService.instance.logined.value
+                  ? const Icon(Icons.logout)
+                  : const Icon(Icons.chevron_right),
+              onTap: controller.huyaTap,
             ),
-            title: const Text("虎牙直播"),
-            subtitle: const Text("无需登录"),
-            enabled: false,
-            trailing: const Icon(Icons.chevron_right),
           ),
           Obx(
             () => ListTile(
@@ -75,11 +82,13 @@ class AccountPage extends GetView<AccountController> {
                 height: 36,
               ),
               title: const Text("抖音直播"),
-              subtitle: Text(DouyinAccountService.instance.hasCookie.value
-                  ? "已自定义（${DouyinAccountService.instance.cookie.length} 字符）"
-                  : "使用默认 ttwid"),
-              trailing: DouyinAccountService.instance.hasCookie.value
-                  ? const Icon(Icons.delete_outline)
+              subtitle: Text(DouyinAccountService.instance.logined.value
+                  ? DouyinAccountService.instance.name.value
+                  : DouyinAccountService.instance.hasCookie.value
+                      ? "未登录（已自定义 ttwid）"
+                      : "未登录（使用默认 ttwid）"),
+              trailing: DouyinAccountService.instance.logined.value
+                  ? const Icon(Icons.logout)
                   : const Icon(Icons.chevron_right),
               onTap: controller.douyinTap,
             ),

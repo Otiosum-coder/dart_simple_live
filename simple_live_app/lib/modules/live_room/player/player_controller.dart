@@ -475,6 +475,12 @@ mixin PlayerGestureControlMixin
     on PlayerStateMixin, PlayerMixin, PlayerSystemMixin {
   /// 单击显示/隐藏控制器
   void onTap() {
+    // 键盘/输入框有焦点时点画面：先收起键盘并让输入框失焦，不切换控制条
+    if (DanmakuInputBar.typing) {
+      FocusManager.instance.primaryFocus?.unfocus();
+      DanmakuInputBar.typing = false;
+      return;
+    }
     if (showControlsState.value) {
       hideControls();
     } else {

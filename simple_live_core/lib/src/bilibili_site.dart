@@ -61,6 +61,22 @@ class BiliBiliSite implements LiveSite {
           };
   }
 
+  /// 分类封面图：补全协议、强制 https（Android 默认禁止 cleartext HTTP，
+  /// B站部分分区图返回的是 http:// 地址，直接用会加载失败只剩占位图标）
+  String _areaPic(String? raw) {
+    var url = (raw ?? "").trim();
+    if (url.isEmpty) {
+      return "";
+    }
+    if (url.startsWith("//")) {
+      url = "https:$url";
+    }
+    if (url.startsWith("http://")) {
+      url = url.replaceFirst("http://", "https://");
+    }
+    return "$url@100w.png";
+  }
+
   @override
   Future<List<LiveCategory>> getCategores() async {
     List<LiveCategory> categories = [];
@@ -73,13 +89,16 @@ class BiliBiliSite implements LiveSite {
       header: await getHeader(),
     );
     for (var item in result["data"]) {
+      // 父分区封面：子分区没有图时用它兜底（否则会变成统一占位图标）
+      var parentPic = _areaPic(asT<String?>(item["pic"]));
       List<LiveSubCategory> subs = [];
       for (var subItem in item["list"]) {
+        var subPic = _areaPic(asT<String?>(subItem["pic"]));
         var subCategory = LiveSubCategory(
           id: subItem["id"].toString(),
           name: asT<String?>(subItem["name"]) ?? "",
           parentId: asT<String?>(subItem["parent_id"]) ?? "",
-          pic: "${asT<String?>(subItem["pic"]) ?? ""}@100w.png",
+          pic: subPic.isNotEmpty ? subPic : parentPic,
         );
         subs.add(subCategory);
       }

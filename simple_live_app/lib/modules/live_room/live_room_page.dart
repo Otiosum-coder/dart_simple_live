@@ -250,24 +250,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
               Obx(
                 () => !AppSettingsController.instance.playerSendDanmaku.value
                     ? const SizedBox.shrink()
-                    : SizedBox(
-                        // 与上方聊天面板严格同宽
-                        width: (MediaQuery.sizeOf(context).width * 0.36)
-                            .clamp(200.0, 300.0),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).cardColor,
-                          ),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
-                          ),
-                          child: DanmakuInputBar(
-                            controller: controller,
-                            overlay: true,
-                          ),
-                        ),
-                      ),
+                    : const SizedBox.shrink(),
               ),
             ],
           ),
@@ -731,9 +714,6 @@ class LiveRoomPage extends GetView<LiveRoomController> {
           return const SizedBox.shrink();
         }
         // 桌面/横屏：输入框在底栏右侧，聊天页不重复
-        if (MediaQuery.of(Get.context!).orientation != Orientation.portrait) {
-          return const SizedBox.shrink();
-        }
 
         return DanmakuInputBar(controller: controller);
       },

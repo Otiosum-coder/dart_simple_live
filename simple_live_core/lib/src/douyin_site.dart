@@ -85,7 +85,12 @@ class DouyinSite implements LiveSite {
           name: asT<String?>(subItem["partition"]["title"]) ?? "",
           parentId: id,
           // 子分类没有图就退回父分区的图，最后再交给界面的图标兜底
-          pic: _pickPartitionImageUrl(subItem["partition"]) ??
+          pic: DouyinGameArtwork.assetUriForCategory(
+                categoryId:
+                    '${subItem["partition"]["id_str"]},${subItem["partition"]["type"]}',
+                categoryName: asT<String?>(subItem["partition"]["title"]) ?? "",
+              ) ??
+              _pickPartitionImageUrl(subItem["partition"]) ??
               _pickPartitionImageUrl(item["partition"]),
         );
         subs.add(subCategory);
@@ -102,7 +107,11 @@ class DouyinSite implements LiveSite {
           id: category.id,
           name: category.name,
           parentId: category.id,
-          pic: _pickPartitionImageUrl(item["partition"]),
+          pic: DouyinGameArtwork.assetUriForCategory(
+                categoryId: id,
+                categoryName: asT<String?>(item["partition"]["title"]) ?? "",
+              ) ??
+              _pickPartitionImageUrl(item["partition"]),
         ),
       );
       categories.add(category);

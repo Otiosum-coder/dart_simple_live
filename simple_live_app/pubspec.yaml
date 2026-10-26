@@ -107,6 +107,7 @@ flutter:
     - assets/images/
     # 抖音表情包（聊天区/表情渲染用）
     - assets/images/douyin_emoji/
+    - assets/images/douyin_games_webp/
     - assets/icons/
     - assets/lotties/
 # 悬浮弹幕表情：使用打了富文本补丁的弹幕库（third_party/canvas_danmaku）

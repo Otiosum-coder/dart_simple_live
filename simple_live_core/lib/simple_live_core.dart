@@ -8,6 +8,7 @@ export 'src/douyu_site.dart';
 export 'src/douyin_site.dart';
 export 'src/common/core_error.dart';
 export 'src/common/core_log.dart';
+export 'src/common/douyin_game_artwork.dart';
 export 'src/common/live_duration.dart';
 export 'src/model/live_message.dart';
 export 'src/danmaku/bilibili_danmaku.dart';
