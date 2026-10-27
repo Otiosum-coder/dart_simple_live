@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -45,7 +46,7 @@ class HuyaQRLoginController extends GetxController {
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
   /// 二维码有效期（秒）。虎牙前端没给明确时长，按 3 分钟处理。
-  static const int expireSeconds = 180;
+  static const int expireSeconds = 300;
 
   static const Duration pollInterval = Duration(milliseconds: 1500);
 
@@ -53,6 +54,53 @@ class HuyaQRLoginController extends GetxController {
   Rx<HuyaQRStatus> qrStatus = HuyaQRStatus.loading.obs;
 
   String qrId = "";
+
+  /// 是否为本次会话生成过 guid（虎牙用 guid/__yamid_new Cookie 绑定上下文）
+  bool _sessionInited = false;
+
+  /// 是否已经给服务端发过「已扫码」通知（只发一次）
+  bool _scanNotified = false;
+
+  String _newGuid() {
+    var random = Random.secure();
+    var chars = "0123456789abcdef";
+    var buffer = StringBuffer();
+    for (var i = 0; i < 32; i++) {
+      if (i == 12) {
+        buffer.write("4");
+      } else if (i == 16) {
+        buffer.write(chars[8 + random.nextInt(4)]);
+      } else {
+        buffer.write(chars[random.nextInt(16)]);
+      }
+    }
+    return buffer.toString();
+  }
+
+  /// 网页端 context 格式：WB-<udb_guiddata>-<__yamid_new>-<guid>
+  /// （三个 Cookie 的值，缺一个服务端就会把扫码确认当成别的会话）
+  String get _wbContext =>
+      "WB-${_jar["udb_guiddata"] ?? ""}-${_jar["__yamid_new"] ?? ""}-${_jar["guid"] ?? ""}";
+
+  String get _sdid => _jar["sdid"] ?? "";
+
+  /// 补齐会话 Cookie（只做一次）：优先用引导请求拿到的值，缺哪个补哪个
+  void _ensureSession() {
+    if (_sessionInited) {
+      return;
+    }
+    _sessionInited = true;
+    _jar["guid"] ??= _newGuid();
+    _jar["__yamid_new"] ??= _newGuid().toUpperCase();
+    _jar["udb_guiddata"] ??= _newGuid();
+    _jar["sdid"] ??= _newGuid() + "-" + _newGuid();
+  }
+
+  /// 先访问个人中心：服务端会下发 guid / __yamid_new / udb_guiddata / sdid，
+  /// 这些 Cookie 与 context 必须一致，否则扫码确认绑定不到同一会话。
+  Future<void> _bootstrap() async {
+    await _get("https://i.huya.com/");
+  }
   Timer? _timer;
   DateTime? _startTime;
 
@@ -62,11 +110,16 @@ class HuyaQRLoginController extends GetxController {
   String get _cookieHeader =>
       _jar.entries.map((e) => '${e.key}=${e.value}').join('; ');
 
-  Map<String, String> get _headers => {
+  Map<String, String> _headersFor(String uri, String reqid) => {
+        "accept": "*/*",
         "content-type": "application/json;charset=UTF-8",
         "user-agent": userAgent,
         "origin": HuyaUdbRequest.baseUrl,
-        "referer": "${HuyaUdbRequest.baseUrl}/web/middle/2.5/70001/https/",
+        "context": _wbContext,
+        "uri": uri,
+        "reqid": reqid,
+        "referer":
+            "${HuyaUdbRequest.baseUrl}/web/middle/${HuyaUdbRequest.version}/$reqid/https/${_jar["udb_guiddata"] ?? ""}",
         if (_jar.isNotEmpty) "cookie": _cookieHeader,
       };
 
@@ -103,21 +156,36 @@ class HuyaQRLoginController extends GetxController {
   }
 
   /// 发一个带信封的 POST 请求
-  Future<Map> _post(String path, String uri, Map<String, dynamic> data) async {
+  Future<Map> _post(
+    String path,
+    String uri,
+    Map<String, dynamic> data, {
+    String? context,
+  }) async {
     var url = "${HuyaUdbRequest.baseUrl}$path";
+    var reqid = DateTime.now().millisecondsSinceEpoch.toString();
     var response = await HttpClient.instance.dio.request(
       url,
-      data: jsonEncode(HuyaUdbRequest.envelope(url: url, uri: uri, data: data)),
+      data: jsonEncode(
+        HuyaUdbRequest.envelope(
+          uri: uri,
+          data: data,
+          context: context ?? _wbContext,
+          sdid: _sdid,
+          requestId: reqid,
+        ),
+      ),
       options: Options(
         method: "POST",
         responseType: ResponseType.plain,
         followRedirects: false,
-        headers: _headers,
+        headers: _headersFor(uri, reqid),
       ),
     );
     _collectCookies(response.headers);
     return _asMap(response.data);
   }
+
 
   /// 带 Cookie 的普通 GET（用于兜底补登录态）
   Future<void> _get(String url) async {
@@ -151,13 +219,16 @@ class HuyaQRLoginController extends GetxController {
       _timer?.cancel();
       qrStatus.value = HuyaQRStatus.loading;
       qrId = "";
+      _scanNotified = false;
+      await _bootstrap();
+      _ensureSession();
       qrImage.value = null;
 
       var result = await _post("/qrLgn/getQrId", "70001", {
         "behavior": HuyaUdbRequest.behavior(),
         "type": "",
         "domainList": "",
-        "page": "https://www.huya.com/",
+        "page": HuyaUdbRequest.page,
       });
       if (result["returnCode"] != 0) {
         throw result["message"]?.toString().isNotEmpty == true
@@ -217,12 +288,12 @@ class HuyaQRLoginController extends GetxController {
       return;
     }
     try {
-      var result = await _post("/qrLgn/tryQrLogin", "70003", {
+      var result = await _post("/qrLgn/tryQrLogin", "70003", context: _wbContext, {
         "qrId": qrId,
-        "remember": "0",
+        "remember": "1",
         "domainList": "",
         "behavior": HuyaUdbRequest.behavior(),
-        "page": "https://www.huya.com/",
+        "page": HuyaUdbRequest.page,
       });
       if (result["returnCode"] != 0) {
         // 偶发失败不打断轮询
@@ -231,11 +302,39 @@ class HuyaQRLoginController extends GetxController {
       }
       var data = _asMap(result["data"]);
       var stage = data["stage"];
-      Log.i("虎牙扫码登录：stage=$stage jar=${_jar.length}");
+      Log.i("虎牙扫码登录：stage=$stage jar=${_jar.length} data=${jsonEncode(data)}");
       if (stage == 2 || stage == 3) {
         _timer?.cancel();
         await loginSuccess(data);
-      } else if (stage == 1 || stage == 10) {
+        return;
+      }
+      // 兜底：有些情况服务端不推 stage，只直接 Set-Cookie udb_uid
+      if (_jar.containsKey("udb_uid")) {
+        _timer?.cancel();
+        await loginSuccess(data);
+        return;
+      }
+      if (stage == 1 || stage == 10 || stage == 7) {
+        // 1/10 已扫待确认；7 为实测出现但文档未覆盖的状态（扫码后出现），
+        // 当作「已扫码」继续轮询，等 Cookie
+        if (!_scanNotified) {
+          _scanNotified = true;
+          try {
+            var notify = await _post(
+              "/qrLgn/scanQrPicNotify",
+              "70005",
+              {
+                "qrId": qrId,
+                "behavior": HuyaUdbRequest.behavior(),
+                "page": HuyaUdbRequest.page,
+              },
+              context: _wbContext,
+            );
+            Log.i("虎牙扫码登录：scanQrPicNotify -> ${jsonEncode(notify)}");
+          } catch (e) {
+            Log.logPrint(e);
+          }
+        }
         qrStatus.value = HuyaQRStatus.scanned;
       } else if (stage == 5) {
         _timer?.cancel();

@@ -6,7 +6,6 @@ import 'package:get/get.dart';
 import 'package:simple_live_app/app/controller/base_controller.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/modules/mine/account/web_login_helper.dart';
-import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/huya_account_service.dart';
 
 /// 虎牙 Web 登录（账号密码 / 手机验证码 / 网页扫码都能用）
@@ -94,11 +93,6 @@ class HuyaWebLoginController extends BaseController {
       _handled = false;
       _startWatch();
     }
-  }
-
-  void toQRLogin() async {
-    await Get.toNamed(RoutePath.kHuyaQRLogin);
-    Get.back();
   }
 
   @override

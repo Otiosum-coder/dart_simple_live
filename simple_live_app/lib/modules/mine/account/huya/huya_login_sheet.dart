@@ -5,7 +5,7 @@ import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/huya_account_service.dart';
 
-/// 虎牙登录方式选择：扫码登录 / Web登录 / 手动填写 Cookie
+/// 虎牙登录方式选择：扫码登录 / Web登录（含扫码）/ 手动填写 Cookie
 void showHuyaLoginSheet() {
   Utils.showBottomSheet(
     title: "登录虎牙",
@@ -15,7 +15,7 @@ void showHuyaLoginSheet() {
         ListTile(
           leading: const Icon(Icons.qr_code),
           title: const Text("扫码登录"),
-          subtitle: const Text("使用虎牙APP扫描二维码登录"),
+          subtitle: const Text("使用虎牙APP扫描二维码登录（不经过网页）"),
           trailing: const Icon(Icons.chevron_right),
           onTap: () {
             Get.back();
@@ -25,7 +25,7 @@ void showHuyaLoginSheet() {
         ListTile(
           leading: const Icon(Icons.account_circle_outlined),
           title: const Text("Web登录"),
-          subtitle: const Text("账号密码 / 手机验证码登录"),
+          subtitle: const Text("网页内可扫码，也可用账号密码 / 手机验证码"),
           trailing: const Icon(Icons.chevron_right),
           onTap: () {
             Get.back();

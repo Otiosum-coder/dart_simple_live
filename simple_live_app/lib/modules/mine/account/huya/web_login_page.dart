@@ -11,13 +11,6 @@ class HuyaWebLoginPage extends GetView<HuyaWebLoginController> {
     return Scaffold(
       appBar: AppBar(
         title: const Text("虎牙账号登录"),
-        actions: [
-          TextButton.icon(
-            onPressed: controller.toQRLogin,
-            icon: const Icon(Icons.qr_code),
-            label: const Text("扫码登录"),
-          ),
-        ],
       ),
       body: InAppWebView(
         onWebViewCreated: controller.onWebViewCreated,

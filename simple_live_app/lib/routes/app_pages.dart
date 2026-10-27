@@ -35,8 +35,6 @@ import 'package:simple_live_app/modules/mine/account/huya/qr_login_controller.da
 import 'package:simple_live_app/modules/mine/account/huya/qr_login_page.dart';
 import 'package:simple_live_app/modules/mine/account/huya/web_login_controller.dart';
 import 'package:simple_live_app/modules/mine/account/huya/web_login_page.dart';
-import 'package:simple_live_app/modules/mine/account/douyin/qr_login_controller.dart';
-import 'package:simple_live_app/modules/mine/account/douyin/qr_login_page.dart';
 import 'package:simple_live_app/modules/mine/account/douyin/web_login_controller.dart';
 import 'package:simple_live_app/modules/mine/account/douyin/web_login_page.dart';
 import 'package:simple_live_app/modules/mine/account/bilibili/web_login_controller.dart';
@@ -214,14 +212,6 @@ class AppPages {
       page: () => const HuyaWebLoginPage(),
       bindings: [
         BindingsBuilder.put(() => HuyaWebLoginController()),
-      ],
-    ),
-    //抖音二维码登录
-    GetPage(
-      name: RoutePath.kDouyinQRLogin,
-      page: () => const DouyinQRLoginPage(),
-      bindings: [
-        BindingsBuilder.put(() => DouyinQRLoginController()),
       ],
     ),
     //抖音Web登录

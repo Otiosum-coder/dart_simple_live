@@ -6,7 +6,10 @@ import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
-/// 抖音登录方式选择：扫码登录 / Web登录 / 自定义 ttwid
+/// 抖音登录方式选择：Web登录 / 自定义 ttwid
+///
+/// 抖音的纯 API 扫码已被官方风控封死（check_qrconnect 恒返回 4031），
+/// 所以不再提供扫码入口；WebView 登录页里仍然可以扫码，只是走网页。
 ///
 /// 注意「登录」和「ttwid」是两件事：
 /// * ttwid 决定能不能看全部画质（含蓝光），不登录也能用；
@@ -17,16 +20,6 @@ void showDouyinLoginSheet() {
     child: Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        ListTile(
-          leading: const Icon(Icons.qr_code),
-          title: const Text("扫码登录"),
-          subtitle: const Text("使用抖音APP扫描二维码登录"),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () {
-            Get.back();
-            Get.toNamed(RoutePath.kDouyinQRLogin);
-          },
-        ),
         ListTile(
           leading: const Icon(Icons.account_circle_outlined),
           title: const Text("Web登录"),
