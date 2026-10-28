@@ -15,7 +15,7 @@ class DouyuWebLoginPage extends GetView<DouyuWebLoginController> {
           TextButton.icon(
             onPressed: controller.toQRLogin,
             icon: const Icon(Icons.qr_code),
-            label: const Text("扫码登录"),
+            label: const Text("二维码登录"),
           ),
         ],
       ),

@@ -21,8 +21,10 @@ class DouyuWebLoginController extends BaseController {
 
   static const String loginUrl = "https://passport.douyu.com/member/login";
 
+  /// 用移动端 UA：passport.douyu.com/member/login 会渲染成 H5 登录页
+  /// （手机号+密码 / 手机快捷登录），而不是桌面整页
   static const String userAgent =
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1";
 
   static const List<String> cookieUrls = [
     "https://passport.douyu.com",
@@ -34,8 +36,10 @@ class DouyuWebLoginController extends BaseController {
   Timer? _timer;
   bool _handled = false;
 
-  void onWebViewCreated(InAppWebViewController controller) {
+  void onWebViewCreated(InAppWebViewController controller) async {
     webViewController = controller;
+    // 先清掉上次的登录态，避免退出账号后重新打开时自动登录旧账号
+    await _helper.clear(cookieUrls);
     webViewController!.loadUrl(
       urlRequest: URLRequest(url: WebUri(loginUrl)),
     );

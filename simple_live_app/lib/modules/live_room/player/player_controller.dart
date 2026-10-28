@@ -675,6 +675,9 @@ class PlayerController extends BaseController
     super.onInit();
   }
 
+  /// 起播计时：open 前设置，首帧（宽或高首次非空）时打印耗时
+  static Stopwatch? firstFrameWatch;
+
   StreamSubscription<String>? _errorSubscription;
   StreamSubscription? _completedSubscription;
   StreamSubscription? _widthSubscription;
@@ -712,6 +715,10 @@ class PlayerController extends BaseController
     _widthSubscription = player.stream.width.listen((event) {
       Log.d(
           'width:$event  W:${(player.state.width)}  H:${(player.state.height)}');
+      if (event != null && firstFrameWatch != null) {
+        Log.i("播放首帧耗时：${firstFrameWatch!.elapsedMilliseconds}ms");
+        firstFrameWatch = null;
+      }
       isVertical.value =
           (player.state.height ?? 9) > (player.state.width ?? 16);
     });

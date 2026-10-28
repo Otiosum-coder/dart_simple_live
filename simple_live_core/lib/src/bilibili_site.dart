@@ -203,6 +203,7 @@ class BiliBiliSite implements LiveSite {
   Future<List<LivePlayQuality>> getPlayQualites(
       {required LiveRoomDetail detail}) async {
     List<LivePlayQuality> qualities = [];
+    var sw = Stopwatch()..start();
     var result = await _getRoomPlayInfo({
       "room_id": detail.roomId,
       "protocol": "0,1",
@@ -210,6 +211,7 @@ class BiliBiliSite implements LiveSite {
       "codec": "0,1",
       "platform": "web",
     });
+    CoreLog.d("B站加载耗时：getRoomPlayInfo=${sw.elapsedMilliseconds}ms");
     // 限定/付费直播时 playurl_info 为 null，这里给出明确原因而不是崩在深链上
     var playurl = _getPlayurl(result);
     if (playurl == null) {
@@ -357,7 +359,10 @@ class BiliBiliSite implements LiveSite {
 
   @override
   Future<LiveRoomDetail> getRoomDetail({required String roomId}) async {
+    var sw = Stopwatch()..start();
     var roomInfo = await getRoomInfo(roomId: roomId);
+    CoreLog.d("B站加载耗时：getInfoByRoom=${sw.elapsedMilliseconds}ms");
+    sw.reset();
     // 房间不存在时 B站不返回 room_info
     if (roomInfo["room_info"] is! Map) {
       return LiveRoomDetail(
@@ -383,6 +388,7 @@ class BiliBiliSite implements LiveSite {
       queryParameters: queryParams,
       header: await getHeader(),
     );
+    CoreLog.d("B站加载耗时：getDanmuInfo=${sw.elapsedMilliseconds}ms");
     List<String> serverHosts = (roomDanmakuResult["data"]["host_list"] as List)
         .map<String>((e) => e["host"].toString())
         .toList();
@@ -449,7 +455,6 @@ class BiliBiliSite implements LiveSite {
       queryParameters: queryParams,
       header: await getHeader(),
     );
-    print("【B站接口返回】roomId=$roomId, result=$result");
     return result["data"];
   }
 

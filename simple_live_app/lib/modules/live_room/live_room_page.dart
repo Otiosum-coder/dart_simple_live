@@ -246,11 +246,18 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                 icon: const Icon(Remix.file_copy_line),
                 label: const Text("复制播放直链"),
               ),
-              // 新布局：输入框放在底栏右侧（原三个按钮的位置）
+              // 桌面/横屏：输入框贴窗口底，宽度与右侧面板完全一致
               Obx(
                 () => !AppSettingsController.instance.playerSendDanmaku.value
                     ? const SizedBox.shrink()
-                    : const SizedBox.shrink(),
+                    : SizedBox(
+                        width: (MediaQuery.sizeOf(context).width * 0.36)
+                            .clamp(200.0, 300.0),
+                        child: DanmakuInputBar(
+                          controller: controller,
+                          overlay: true,
+                        ),
+                      ),
               ),
             ],
           ),
@@ -713,8 +720,10 @@ class LiveRoomPage extends GetView<LiveRoomController> {
         if (!enabled) {
           return const SizedBox.shrink();
         }
-        // 桌面/横屏：输入框在底栏右侧，聊天页不重复
-
+        // 竖屏：输入框在聊天页底部；桌面/横屏放到窗口底栏，聊天页不重复
+        if (MediaQuery.of(Get.context!).orientation != Orientation.portrait) {
+          return const SizedBox.shrink();
+        }
         return DanmakuInputBar(controller: controller);
       },
     );

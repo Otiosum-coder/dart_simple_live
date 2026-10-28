@@ -141,12 +141,22 @@ class _DanmakuInputBarState extends State<DanmakuInputBar> {
     if (!supported) {
       _focusNode.unfocus();
     }
+    // 主题色：暗色主题下不要再压到接近纯黑，浅色主题用浅灰底 + 深色文字
+    var isDark = Theme.of(context).brightness == Brightness.dark;
+    var fieldBg = isDark ? const Color(0xFF2C2C2E) : const Color(0xFFEFEFF1);
+    var fieldBorder = isDark ? Colors.white24 : const Color(0xFFD8D8DC);
+    var textColor = isDark ? Colors.white : const Color(0xFF1F2229);
+    var disabledColor = isDark ? Colors.white54 : Colors.black38;
+    var hintColor = isDark ? const Color(0xFF9AA0A6) : const Color(0xFF8A8F99);
+    var counterDim = isDark ? Colors.white38 : Colors.black38;
+    var cursorColor = isDark ? Colors.white : scheme.primary;
     var pill = Container(
       height: 44,
       padding: const EdgeInsets.only(left: 16, right: 5),
       decoration: BoxDecoration(
-        color: const Color(0xEB15181C),
+        color: fieldBg,
         borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: fieldBorder),
       ),
       child: Row(
         children: [
@@ -160,19 +170,19 @@ class _DanmakuInputBarState extends State<DanmakuInputBar> {
               onSubmitted: (_) => _send(),
               maxLength: _maxLength,
               maxLengthEnforcement: MaxLengthEnforcement.truncateAfterCompositionEnds,
-              cursorColor: Colors.white,
+              cursorColor: cursorColor,
               style: TextStyle(
                 fontSize: 13.5,
-                color: supported ? Colors.white : Colors.white54,
+                color: supported ? textColor : disabledColor,
               ),
               decoration: InputDecoration(
                 isDense: true,
                 counterText: "",
                 border: InputBorder.none,
                 hintText: supported ? "说点什么吧~" : "该平台暂不支持发送弹幕",
-                hintStyle: const TextStyle(
+                hintStyle: TextStyle(
                   fontSize: 13.5,
-                  color: Color(0xFF8B9299),
+                  color: hintColor,
                 ),
                 contentPadding: EdgeInsets.zero,
               ),
@@ -189,7 +199,7 @@ class _DanmakuInputBarState extends State<DanmakuInputBar> {
                       ? Colors.redAccent
                       : (_maxLength - _charCount <= 5
                           ? Colors.orangeAccent
-                          : Colors.white38),
+                          : counterDim),
                 ),
               ),
             ),
@@ -241,9 +251,9 @@ class _DanmakuInputBarState extends State<DanmakuInputBar> {
           height: 36,
           padding: const EdgeInsets.only(left: 14, right: 10),
           decoration: BoxDecoration(
-            color: const Color(0xFF1E2027),
+            color: const Color(0xFF2C2C2E),
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.white30),
+            border: Border.all(color: Colors.white24),
           ),
           child: Row(
             children: [

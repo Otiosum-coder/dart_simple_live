@@ -87,6 +87,11 @@ class BiliBiliDanmaku implements LiveDanmaku {
         onClose?.call("服务器连接失败$e");
       },
     );
+    CoreLog.d(
+      "B站弹幕：host=${args.serverHost} roomId=${args.roomId} uid=${args.uid} "
+      "token=${args.token.isEmpty ? "空" : "有"} buvid=${args.buvid.isEmpty ? "空" : "有"} "
+      "cookie=${args.cookie.isEmpty ? "无" : "有"}",
+    );
     webScoketUtils?.connect();
   }
 
@@ -103,6 +108,7 @@ class BiliBiliDanmaku implements LiveDanmaku {
       }),
       7,
     );
+    CoreLog.d("B站弹幕：发送 join 包（${joinData.length} 字节）");
     webScoketUtils?.sendMessage(joinData);
   }
 

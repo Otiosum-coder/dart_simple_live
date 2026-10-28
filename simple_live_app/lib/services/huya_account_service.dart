@@ -1,6 +1,11 @@
+import 'dart:convert';
+
 import 'package:get/get.dart';
+import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/sites.dart';
+import 'package:simple_live_app/requests/http_client.dart';
+import 'package:simple_live_app/services/huya_cookie_harvester.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
@@ -20,12 +25,20 @@ class HuyaAccountService extends GetxService {
   var name = "未登录".obs;
   var logined = false.obs;
 
+  /// 展示昵称（Cookie 里只有账号名，昵称走用户信息接口）
+  var nickname = "";
+
   @override
   void onInit() {
     cookie = LocalStorageService.instance
         .getValue(LocalStorageService.kHuyaCookie, "");
+    nickname = LocalStorageService.instance
+        .getValue(LocalStorageService.kHuyaNickname, "");
     parseCookie();
     setSite();
+    if (logined.value && nickname.isEmpty) {
+      fetchNickname();
+    }
     super.onInit();
   }
 
@@ -56,12 +69,15 @@ class HuyaAccountService extends GetxService {
     }
     var map = parseCookieMap(cookie);
     uid = map["udb_uid"] ?? map["yyuid"] ?? "";
-    var nickname = _decode(map["username"] ?? "");
-    if (nickname.isEmpty) {
-      nickname = _decode(map["udb_passport"] ?? "");
+    var display = nickname;
+    if (display.isEmpty) {
+      display = _decode(map["username"] ?? "");
     }
-    if (nickname.isNotEmpty) {
-      name.value = nickname;
+    if (display.isEmpty) {
+      display = _decode(map["udb_passport"] ?? "");
+    }
+    if (display.isNotEmpty) {
+      name.value = display;
     } else if (uid.isNotEmpty) {
       name.value = "已登录（$uid）";
     } else {
@@ -89,6 +105,82 @@ class HuyaAccountService extends GetxService {
         .setValue(LocalStorageService.kHuyaCookie, cookie);
     parseCookie();
     setSite();
+    // 登录成功后（或 Cookie 还比较薄时）用不可见 WebView 到 www.huya.com
+    // 补全整套 Cookie —— 发弹幕要用那份"厚 Cookie"
+    if (logined.value && cookie.length < 1500) {
+      harvestCookie();
+    }
+  }
+
+  bool _harvesting = false;
+  bool _fetchingNickname = false;
+
+  /// 用（补全后的）Cookie 查展示昵称：www.huya.com 的用户信息接口
+  Future<void> fetchNickname() async {
+    if (_fetchingNickname || cookie.isEmpty) {
+      return;
+    }
+    _fetchingNickname = true;
+    try {
+      var result = await HttpClient.instance.getJson(
+        "https://www.huya.com/udb_web/udbport2.php",
+        queryParameters: {"m": "User", "do": "getUserInfo"},
+        header: {
+          "cookie": cookie,
+          "user-agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+          "referer": "https://www.huya.com/",
+        },
+        timeout: const Duration(seconds: 8),
+      );
+      var map = result is Map
+          ? result
+          : (result is String && result.trim().startsWith("{")
+              ? jsonDecode(result)
+              : <dynamic, dynamic>{});
+      var nick = (map["userNick"] ?? "").toString().trim();
+      Log.i("虎牙昵称接口：isLogined=${map["isLogined"]} userNick=$nick");
+      if (nick.isNotEmpty) {
+        nickname = nick;
+        LocalStorageService.instance
+            .setValue(LocalStorageService.kHuyaNickname, nick);
+        parseCookie();
+      }
+    } catch (e) {
+      Log.logPrint(e);
+    } finally {
+      _fetchingNickname = false;
+    }
+  }
+
+  /// 用不可见 WebView 补全 Cookie（成功后覆盖保存）
+  Future<void> harvestCookie() async {
+    if (_harvesting || cookie.isEmpty) {
+      return;
+    }
+    _harvesting = true;
+    try {
+      var before = cookie.length;
+      var full = await HuyaCookieHarvester.harvest(cookie);
+      if (full != null && full.isNotEmpty && full.length > before) {
+        Log.i("虎牙Cookie补全：$before -> ${full.length}");
+        cookie = full;
+        LocalStorageService.instance
+            .setValue(LocalStorageService.kHuyaCookie, cookie);
+        parseCookie();
+        setSite();
+      } else {
+        Log.i("虎牙Cookie补全：未拿到更多 Cookie（before=$before）");
+      }
+      // Cookie 变厚之后，网页域可能已经能查到昵称了
+      if (logined.value && nickname.isEmpty) {
+        fetchNickname();
+      }
+    } catch (e) {
+      Log.logPrint(e);
+    } finally {
+      _harvesting = false;
+    }
   }
 
   void logout() {

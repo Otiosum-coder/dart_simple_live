@@ -19,6 +19,7 @@ import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/services/background_playback.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyu_account_service.dart';
+import 'package:simple_live_app/services/huya_account_service.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/history.dart';
 import 'package:simple_live_app/modules/live_room/player/player_controller.dart';
@@ -82,10 +83,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   RxList<LiveSuperChatMessage> superChats = RxList<LiveSuperChatMessage>();
 
   /// 画面内 SC 卡片显示时长（秒，固定）
-  static const int overlaySuperChatSeconds = 15;
-
-  /// 画面内 SC 最多同时显示几条
-  static const int overlaySuperChatMaxCount = 4;
+  static const int overlaySuperChatSeconds = 10;
 
   /// 画面内 SC 展示列表（过期时间由数据层决定，UI 只渲染）
   RxList<OverlaySuperChat> overlaySuperChats = <OverlaySuperChat>[].obs;
@@ -263,9 +261,21 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     liveDanmaku.onReady = onWSReady;
   }
 
+  /// 最近一次发送的弹幕（用于避免本地回显与真实推送重复）
+  String _lastSentText = "";
+  DateTime? _lastSentAt;
+  bool _lastSentEchoed = false;
+
   /// 接收到WebSocket信息
   void onWSMessage(LiveMessage msg) {
     if (msg.type == LiveMessageType.chat) {
+      var sentAt = _lastSentAt;
+      if (_lastSentText.isNotEmpty &&
+          msg.message == _lastSentText &&
+          sentAt != null &&
+          DateTime.now().difference(sentAt).inSeconds <= 5) {
+        _lastSentEchoed = true;
+      }
       if (messages.length > 200 && !disableAutoScroll.value) {
         messages.removeAt(0);
       }
@@ -505,10 +515,32 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         return "";
       }
     }
+    Log.i("发送弹幕[${site.id}]：$message");
+    // 先记录，供 onWSMessage 判断“这条是我刚发的”（广播可能比回执先到）
+    _lastSentText = message;
+    _lastSentAt = DateTime.now();
+    _lastSentEchoed = false;
     var error = await liveDanmaku.sendDanmaku(message);
+    Log.i("发送弹幕[${site.id}]结果：${error ?? "成功"}");
     if (error == null) {
       _lastSendTime = DateTime.now();
       danmakuSessionLost.value = false;
+      // 本地回显：等 1.5 秒，如果服务端没有把这条推回来，再自己补一条
+      // （避免和真实推送重复）
+      Future.delayed(const Duration(milliseconds: 1500), () {
+        if (_lastSentEchoed || _lastSentText != message) {
+          return;
+        }
+        Log.i("发送成功，本地回显：$message");
+        onWSMessage(
+          LiveMessage(
+            type: LiveMessageType.chat,
+            userName: _selfName(),
+            message: message,
+            color: LiveMessageColor.white,
+          ),
+        );
+      });
     } else if (error.contains("4206") ||
         error.contains("4205") ||
         error.contains("已过期") ||
@@ -516,6 +548,21 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       danmakuSessionLost.value = true;
     }
     return error;
+  }
+
+  /// 自己发弹幕时用于本地回显的昵称
+  String _selfName() {
+    if (site.id == Constant.kHuya) {
+      var nick = HuyaAccountService.instance.nickname;
+      return nick.isNotEmpty ? nick : "我";
+    }
+    if (site.id == Constant.kDouyu) {
+      return DouyuAccountService.instance.name.value;
+    }
+    if (site.id == Constant.kBiliBili) {
+      return BiliBiliAccountService.instance.name.value;
+    }
+    return "我";
   }
 
   /// 未登录时返回提示，已登录返回 null
@@ -527,6 +574,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (site.id == Constant.kDouyu &&
         !DouyuAccountService.instance.logined.value) {
       return "请先登录斗鱼";
+    }
+    if (site.id == Constant.kHuya &&
+        !HuyaAccountService.instance.logined.value) {
+      return "请先登录虎牙（发送弹幕需要登录态）";
     }
     return null;
   }
@@ -561,7 +612,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       error = null;
       update();
       addSysMsg("正在读取直播间信息");
+      var sw = Stopwatch()..start();
       detail.value = await site.liveSite.getRoomDetail(roomId: roomId);
+      Log.i("房间加载耗时[${site.id}] 详情=${sw.elapsedMilliseconds}ms");
+      sw.reset();
 
       // 把最新状态同步回关注列表，避免两边数据不一致
       FollowService.instance.syncRoomStatus(
@@ -615,6 +669,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       addSysMsg("开始连接弹幕服务器");
       initDanmau();
       liveDanmaku.start(detail.value?.danmakuData);
+      Log.i("房间加载耗时[${site.id}] 弹幕连接=${sw.elapsedMilliseconds}ms");
       // 平台能力可能要到 start() 之后才明确，同步一次让输入框即时出现
       canSendDanmaku.value = liveDanmaku.canSendDanmaku;
       startLiveDurationTimer(); // 启动开播时长定时器
@@ -777,10 +832,14 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     await applyNetworkBuffering();
 
     // 加超时：播放器异常/代理挂住时 open 可能一直不返回，导致界面卡死在"没有线路"
+    var openWatch = Stopwatch()..start();
+    PlayerController.firstFrameWatch = openWatch;
+    Log.i("起播开始：${currentUrl.split("?").first}");
     try {
       await player
           .open(Playlist(mediaList))
           .timeout(const Duration(seconds: 12));
+      Log.i("起播耗时：open=${openWatch.elapsedMilliseconds}ms");
     } catch (e) {
       Log.logPrint(e);
       SmartDialog.showToast("起播超时，正在重试");
@@ -958,10 +1017,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     overlaySuperChats.add(
       OverlaySuperChat(sc, DateTime.now().add(Duration(seconds: seconds))),
     );
-    // 超过上限：立刻移除最旧的一条（最上面那条被顶掉）
-    while (overlaySuperChats.length > overlaySuperChatMaxCount) {
-      overlaySuperChats.removeAt(0);
-    }
+    // 不做条数裁剪：每条 SC 10 秒后自己过期，并发条数天然有上限；
+    // 渲染层放不下时会从顶部渐隐，不会再被硬裁掉
     _startOverlayScTimer();
   }
 

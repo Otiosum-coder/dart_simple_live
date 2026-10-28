@@ -8,8 +8,20 @@ import 'package:simple_live_app/services/bilibili_account_service.dart';
 class BiliBiliWebLoginController extends BaseController {
   InAppWebViewController? webViewController;
   final CookieManager cookieManager = CookieManager.instance();
-  void onWebViewCreated(InAppWebViewController controller) {
+  void onWebViewCreated(InAppWebViewController controller) async {
     webViewController = controller;
+    // 先清掉上次的登录态，避免退出账号后重新打开时自动登录旧账号
+    for (final url in const [
+      "https://www.bilibili.com",
+      "https://bilibili.com",
+      "https://passport.bilibili.com",
+    ]) {
+      try {
+        await cookieManager.deleteCookies(url: WebUri(url));
+      } catch (e) {
+        Log.logPrint(e);
+      }
+    }
     webViewController!.loadUrl(
       urlRequest: URLRequest(
         url: WebUri("https://passport.bilibili.com/login"),

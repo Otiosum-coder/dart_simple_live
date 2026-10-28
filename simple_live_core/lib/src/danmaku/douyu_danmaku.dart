@@ -214,6 +214,11 @@ class DouyuDanmaku implements LiveDanmaku {
   bool _senderReady = false;
   Completer<void>? _senderLoginCompleter;
   Completer<String?>? _chatresCompleter;
+
+  /// 第二判据：接收连接上收到「自己这条弹幕」的广播（多设备抢会话时
+  /// chatres 经常丢失，但广播一定会到）
+  Completer<void>? _broadcastCompleter;
+  String? _pendingBroadcastText;
   DateTime? _lastSendAt;
 
   /// 登录 vk 签名的固定盐值（网页 JS 常量，不是账号密钥）
@@ -235,6 +240,10 @@ class DouyuDanmaku implements LiveDanmaku {
   }
 
   /// 建立发送连接并登录：成功返回 null，失败返回错误文案
+  ///
+  /// 斗鱼的会话是「单点登录」：这套凭证在哪台设备上用，服务端就把弹幕会话
+  /// 切到哪台（旧设备会被断开）。所以这里不弹任何「重新登录」提示，
+  /// 每次发送都自动（重）登录，必要时重连一次再试，实现无缝接管。
   Future<String?> _ensureSender() async {
     if (danmakuArgs.jwtExpired) {
       return "斗鱼登录已过期（dmjwt 失效），请重新登录斗鱼";
@@ -242,12 +251,42 @@ class DouyuDanmaku implements LiveDanmaku {
     if (_senderReady && _senderSocket?.status == SocketStatus.connected) {
       return null;
     }
+    // 最多尝试两次：第一次失败（例如上一台设备的会话还没释放）就重连再登录
+    String? lastError;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      lastError = await _tryLoginSender();
+      if (lastError == null) {
+        return null;
+      }
+      CoreLog.i("斗鱼发送：第 ${attempt + 1} 次登录失败 → $lastError");
+      // 换一条新连接再试（旧连接可能停在游客会话上）
+      try {
+        _senderSocket?.close();
+      } catch (e) {
+        CoreLog.error(e);
+      }
+      _senderSocket = null;
+      _senderReady = false;
+    }
+    return lastError;
+  }
+
+  /// 单次：建连 + loginreq + 等 loginres
+  Future<String?> _tryLoginSender() async {
+    // 旧连接若未就绪（被顶号后会残留一条半死连接），直接丢弃重建，
+    // 否则会在上面白等到超时
+    if (_senderSocket != null && !_senderReady) {
+      try {
+        _senderSocket?.close();
+      } catch (e) {
+        CoreLog.error(e);
+      }
+      _senderSocket = null;
+    }
     if (_senderSocket == null) {
       _senderSocket = WebScoketUtils(
         url: senderUrl,
         heartBeatTime: 30 * 1000,
-        // 带上浏览器的 Cookie/Origin/UA：让斗鱼把这条连接视为同一会话，
-        // 而不是"另一个地点登录"（从而尽量避免把用户的浏览器/客户端踢下线）
         headers: {
           "Origin": "https://www.douyu.com",
           "Referer": "https://www.douyu.com/${danmakuArgs.roomId}",
@@ -260,24 +299,22 @@ class DouyuDanmaku implements LiveDanmaku {
         onReconnect: () => _senderReady = false,
         onClose: (e) => _senderReady = false,
       );
-      // 发送连接不做自动重连：被踢后只在用户再次发送时才重新登录，
-      // 避免"自动重连→再踢对方→对方重试→再踢我们"的互踢循环
       _senderSocket?.maxReconnectTime = 0;
     }
     var login = _senderLoginCompleter = Completer<void>();
     _senderReady = false;
     _senderSocket?.connect();
     try {
-      await login.future.timeout(const Duration(seconds: 8));
+      await login.future.timeout(const Duration(seconds: 4));
     } on TimeoutException {
-      return "斗鱼发送连接登录超时，请稍后重试";
+      return "斗鱼发送连接登录超时";
     } finally {
       if (identical(_senderLoginCompleter, login)) {
         _senderLoginCompleter = null;
       }
     }
     if (!_senderReady) {
-      return "斗鱼发送连接登录失败：登录态可能已过期，请重新登录斗鱼";
+      return "斗鱼登录态已失效（jwt 过期或被其它设备接管）";
     }
     return null;
   }
@@ -365,12 +402,28 @@ class DouyuDanmaku implements LiveDanmaku {
       var type = jsonData["type"]?.toString();
       if (type == "loginres") {
         var userid = jsonData["userid"]?.toString() ?? "";
-        _senderReady = userid.isNotEmpty && userid != "0";
-        CoreLog.i("斗鱼发送：wsproxy loginres userid=${userid.length} "
-            "ready=$_senderReady sessionid=${(jsonData["sessionid"]?.toString() ?? "").length}");
+        // 未登录/登录态被接管时，服务端会回一个游客短 uid（如 "8"），
+        // 必须和账号真实 uid 比对，否则会把游客会话当成发送就绪
+        var expectedUid = danmakuArgs.uid;
+        var uidMatches = expectedUid.isEmpty ||
+            userid == expectedUid ||
+            (int.tryParse(userid) != null &&
+                int.tryParse(userid) == int.tryParse(expectedUid));
+        _senderReady =
+            userid.isNotEmpty && userid != "0" && uidMatches;
+        CoreLog.i(
+          "斗鱼发送：wsproxy loginres userid=${userid.length} ready=$_senderReady "
+          "uidMatch=$uidMatches sessionid=${(jsonData["sessionid"]?.toString() ?? "").length}",
+        );
         var login = _senderLoginCompleter;
         if (login != null && !login.isCompleted) {
           login.complete();
+        }
+        if (!_senderReady) {
+          // 登录态无效（过期或被其它设备接管）
+          const msg = "斗鱼登录已在其它设备失效（被接管），请重新登录斗鱼";
+          _chatresCompleter?.complete(msg);
+          _chatresCompleter = null;
         }
         return;
       }
@@ -394,6 +447,15 @@ class DouyuDanmaku implements LiveDanmaku {
             ? "斗鱼登录已过期，请重新登录斗鱼"
             : "斗鱼发送连接出错${code.isEmpty ? "" : "（$code）"}";
         _senderReady = false;
+        // 被顶号（59/51）后这条连接已经废了，主动释放，下次发送直接重建
+        if (code == "59" || code == "51") {
+          try {
+            _senderSocket?.close();
+          } catch (e) {
+            CoreLog.error(e);
+          }
+          _senderSocket = null;
+        }
         var login = _senderLoginCompleter;
         if (login != null && !login.isCompleted) {
           login.complete();
@@ -443,15 +505,24 @@ class DouyuDanmaku implements LiveDanmaku {
         "/dy@=${args.devid}/sender@=${args.uid}"
         "/ifs@=0/nc@=0/dat@=0/rev@=0/tts@=$_nowSec/admzq@=0"
         "/cst@=${DateTime.now().millisecondsSinceEpoch}/";
+    // 第二判据：接收连接上收到自己的弹幕广播
+    var broadcast = _broadcastCompleter = Completer<void>();
+    _pendingBroadcastText = text;
     _senderSocket?.sendMessage(serializeDouyu(body));
     try {
-      // 唯一可信的成功判据：同一条 wsproxy 连接回 type@=chatres/res@=0
-      return await completer.future.timeout(const Duration(seconds: 8));
+      // 成功 = chatres 或 自己的弹幕广播，任一先到即算成功
+      return await Future.any([
+        completer.future,
+        broadcast.future.then<String?>((_) => null),
+      ]).timeout(const Duration(seconds: 8));
     } on TimeoutException {
       if (identical(_chatresCompleter, completer)) {
         _chatresCompleter = null;
       }
-      return "发送超时：内容可能重复或发送过快，换一条内容再试";
+      return "发送超时：可能登录态被其它设备接管，或内容重复、发送过快";
+    } finally {
+      _broadcastCompleter = null;
+      _pendingBroadcastText = null;
     }
   }
 
@@ -492,15 +563,27 @@ class DouyuDanmaku implements LiveDanmaku {
           return;
         }
         var col = int.tryParse(jsonData["col"].toString()) ?? 0;
+        var isSelf = danmakuArgs.uid.isNotEmpty &&
+            jsonData["uid"]?.toString() == danmakuArgs.uid;
         var liveMsg = LiveMessage(
           type: LiveMessageType.chat,
           userName: jsonData["nn"].toString(),
           message: jsonData["txt"].toString(),
           color: getColor(col),
           // 自己发的弹幕：画面弹幕会加描边突出
-          isSelf: danmakuArgs.uid.isNotEmpty &&
-              jsonData["uid"]?.toString() == danmakuArgs.uid,
+          isSelf: isSelf,
         );
+
+        // 自己的弹幕被广播回来 → 说明确实发出去了，直接判成功
+        if (isSelf &&
+            _pendingBroadcastText != null &&
+            jsonData["txt"]?.toString() == _pendingBroadcastText) {
+          CoreLog.i("斗鱼发送：收到自己的弹幕广播，判定成功");
+          var broadcast = _broadcastCompleter;
+          if (broadcast != null && !broadcast.isCompleted) {
+            broadcast.complete();
+          }
+        }
 
         onMessage?.call(liveMsg);
       }

@@ -41,6 +41,8 @@ class BiliBiliAccountService extends GetxService {
         header: {
           "Cookie": cookie,
         },
+        // 弱网下不要卡 20 秒：这个请求只用于显示昵称，失败可以从账号页重试
+        timeout: const Duration(seconds: 6),
       );
       if (result["code"] == 0) {
         var info = BiliBiliUserInfoModel.fromJson(result["data"]);

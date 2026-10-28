@@ -135,6 +135,9 @@ class LocalStorageService extends GetxService {
   /// 虎牙cookie（登录后用于发送弹幕等需要登录态的操作）
   static const String kHuyaCookie = "HuyaCookie";
 
+  /// 虎牙展示昵称（Cookie 里只有账号名 username）
+  static const String kHuyaNickname = "HuyaNickname";
+
   /// 抖音登录cookie（含 sessionid，与「自定义 ttwid」分开存）
   static const String kDouyinLoginCookie = "DouyinLoginCookie";
 

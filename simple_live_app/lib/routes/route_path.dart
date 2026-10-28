@@ -66,11 +66,6 @@ class RoutePath {
   /// 虎牙 二维码登录
   static const kHuyaQRLogin = "/settings/account/huya/qr_login";
 
-  /// 虎牙 Web登录（账号密码 / 手机验证码）
-  static const kHuyaWebLogin = "/settings/account/huya/web_login";
-
-  /// 抖音 Web登录（手机验证码 / 密码）
-  static const kDouyinWebLogin = "/settings/account/douyin/web_login";
 
   /// 数据同步
   static const kLocalSync = "/local_sync";

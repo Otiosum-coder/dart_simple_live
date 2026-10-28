@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:simple_live_app/widgets/danmaku_input_bar.dart';
 import 'package:simple_live_app/widgets/net_image.dart';
-import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
@@ -931,68 +930,61 @@ void showFollowUser(LiveRoomController controller) {
   );
 }
 
-/// 画面内 SC 卡片（样式 A：深色毛玻璃 + 左侧平台色条）
-///
-/// - 字号固定，不随屏幕缩放
-/// - 正文不透明保证可读；平台色只用在色条与进度条上
 /// 画面内 SC 卡片
 ///
-/// - 档位色（金额色）：优先取接口的 background_bottom_color，取不到按金额兜底
-/// - 底板 = 深色底 + 档位色，金额越大越浓（一眼能看出档位）
-/// - 价格徽章用档位色实底；字号固定不随屏幕缩放
-/// - 入场 350ms 高亮一下，提示来了新 SC
+/// 尽量还原 B 站原版 SC 观感：
+/// * 背景用接口给的上下两段颜色做竖向渐变（金额档位越深，颜色越浓）
+/// * 全部白字，价格用半透明白底徽章
+/// * 紧凑排版（头像 28、正文最多 2 行），保证小屏也能放下 3 条
+/// * 入场 350ms 用外发光提示新 SC
 class SuperChatOverlayCard extends StatelessWidget {
   final OverlaySuperChat data;
-  const SuperChatOverlayCard(this.data, {Key? key}) : super(key: key);
+
+  /// 紧凑模式：可用高度不够时正文单行、间距缩小，保证 3 条都能放下
+  final bool dense;
+  const SuperChatOverlayCard(this.data, {this.dense = false, Key? key})
+      : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     var message = data.message;
-    var accent = Utils.superChatColor(
-      color: message.backgroundBottomColor,
-      price: message.price,
-    );
-    // 底板：深色底混入档位色，金额越大越浓
-    var background = Color.alphaBlend(
-      accent.withValues(alpha: Utils.superChatTintAmount(message.price)),
-      const Color(0xCC0C0F13),
-    );
-    // 徽章上的文字颜色按色块亮度自动选
-    var badgeInk = accent.computeLuminance() > 0.55
-        ? const Color(0xFF20160A)
-        : Colors.white;
+    // 半透明档位色：保留一点画面感，但浓度要够，保证白字清晰
+    var topColor = Utils.convertHexColor(message.backgroundColor)
+        .withValues(alpha: 0.72);
+    var bottomColor = Utils.convertHexColor(message.backgroundBottomColor)
+        .withValues(alpha: 0.88);
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
       duration: const Duration(milliseconds: 350),
       curve: Curves.easeOut,
       builder: (context, t, child) {
-        // t: 0 → 刚出现（高亮），1 → 常态
         return Container(
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(11),
+            borderRadius: BorderRadius.circular(10),
             boxShadow: [
               BoxShadow(
-                color: accent.withValues(alpha: 0.35 * (1 - t)),
-                blurRadius: 18,
-                offset: const Offset(0, 4),
+                color: bottomColor.withValues(alpha: 0.30 * (1 - t)),
+                blurRadius: 16,
+                offset: const Offset(0, 3),
               ),
             ],
           ),
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(11),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-              child: Container(
-                padding: const EdgeInsets.fromLTRB(11, 8, 11, 8),
-                decoration: BoxDecoration(
-                  color: background,
-                  borderRadius: BorderRadius.circular(11),
-                  border: Border.all(
-                    color: accent.withValues(alpha: 0.30 + 0.60 * (1 - t)),
-                  ),
+            borderRadius: BorderRadius.circular(10),
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [topColor, bottomColor],
                 ),
-                child: child,
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.14 + 0.30 * (1 - t)),
+                ),
+                borderRadius: BorderRadius.circular(10),
               ),
+              padding: EdgeInsets.fromLTRB(9, dense ? 5 : 7, 9, dense ? 5 : 7),
+              child: child,
             ),
           ),
         );
@@ -1002,9 +994,9 @@ class SuperChatOverlayCard extends StatelessWidget {
         children: [
           NetImage(
             message.face,
-            width: 32,
-            height: 32,
-            borderRadius: 32,
+            width: dense ? 24 : 28,
+            height: dense ? 24 : 28,
+            borderRadius: 28,
           ),
           AppStyle.hGap8,
           Expanded(
@@ -1020,52 +1012,64 @@ class SuperChatOverlayCard extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          fontSize: 13,
+                          fontSize: 12.5,
                           fontWeight: FontWeight.w600,
                           color: Colors.white,
+                          shadows: [
+                            Shadow(
+                              color: Color(0x99000000),
+                              blurRadius: 4,
+                            ),
+                          ],
                         ),
                       ),
                     ),
                     AppStyle.hGap8,
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 1,
-                      ),
-                      decoration: BoxDecoration(
-                        color: accent,
-                        borderRadius: BorderRadius.circular(5),
-                      ),
-                      child: Text(
-                        "￥${message.price}",
-                        style: TextStyle(
-                          fontSize: 10.5,
-                          fontWeight: FontWeight.w600,
-                          color: badgeInk,
-                        ),
+                    // 金额直接白字加粗 + 阴影：半透明卡上比浅色徽章清楚
+                    Text(
+                      "￥${message.price}",
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                        shadows: [
+                          Shadow(
+                            color: Color(0xCC000000),
+                            blurRadius: 5,
+                          ),
+                        ],
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 3),
-                // 全文展开，不截断
+                const SizedBox(height: 2),
                 Text(
                   message.message,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    height: 1.42,
+                  maxLines: dense ? 1 : 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: dense ? 12 : 12.5,
+                    height: 1.3,
+                    fontWeight: FontWeight.w500,
                     color: Colors.white,
+                    shadows: const [
+                      Shadow(
+                        color: Color(0xCC000000),
+                        blurRadius: 5,
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 6),
-                // 剩余时间：细进度条，用档位色
+                SizedBox(height: dense ? 3 : 5),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(2),
                   child: LinearProgressIndicator(
                     value: data.progress,
                     minHeight: 2,
-                    backgroundColor: Colors.white.withValues(alpha: 0.18),
-                    valueColor: AlwaysStoppedAnimation<Color>(accent),
+                    backgroundColor: Colors.white.withValues(alpha: 0.22),
+                    valueColor: const AlwaysStoppedAnimation<Color>(
+                      Colors.white,
+                    ),
                   ),
                 ),
               ],
@@ -1102,15 +1106,25 @@ class PlayerSuperChatOverlay extends StatelessWidget {
           if (list.isEmpty) {
             return const SizedBox.shrink();
           }
+          var screen = MediaQuery.of(context).size;
+          // 不再按条数裁剪：能放多少放多少，放不下的由 TopFadeColumn
+          // 从顶部渐隐（旧卡片往上顶、新卡片在下面）
+          // 横屏手机可用高度很小，给更大的占比，并改用紧凑卡片
+          var maxHeight =
+              screen.height * (screen.width > screen.height ? 0.80 : 0.62);
+          var dense = maxHeight < 3 * 120;
+          var shown = list.reversed.toList();
+          // 手机上再窄一点，避免挡住画面
+          var width = screen.width < 520 ? screen.width * 0.62 : 320.0;
           return SizedBox(
-            width: 360,
+            width: width,
             child: TopFadeColumn(
-              maxHeight: MediaQuery.of(context).size.height * 0.55,
+              maxHeight: maxHeight,
               children: [
                 // 最新的在最下面，旧的往上顶
-                for (var item in list.reversed) ...[
-                  SuperChatOverlayCard(item),
-                  const SizedBox(height: 6),
+                for (var item in shown) ...[
+                  SuperChatOverlayCard(item, dense: dense),
+                  SizedBox(height: dense ? 4 : 6),
                 ],
               ],
             ),

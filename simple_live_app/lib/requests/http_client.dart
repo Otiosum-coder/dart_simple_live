@@ -64,6 +64,7 @@ class HttpClient {
     Map<String, dynamic>? queryParameters,
     Map<String, dynamic>? header,
     CancelToken? cancel,
+    Duration? timeout,
   }) async {
     try {
       queryParameters ??= {};
@@ -74,6 +75,8 @@ class HttpClient {
         options: Options(
           responseType: ResponseType.json,
           headers: header,
+          receiveTimeout: timeout,
+          sendTimeout: timeout,
         ),
         cancelToken: cancel,
       );

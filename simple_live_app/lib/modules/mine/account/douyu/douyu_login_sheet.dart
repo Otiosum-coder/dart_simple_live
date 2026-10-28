@@ -9,6 +9,8 @@ import 'package:simple_live_app/services/douyu_account_service.dart';
 ///
 /// 账号管理页和「未登录画质限制」提示都会用到，抽出来避免重复实现。
 void showDouyuLoginSheet() {
+  // 桌面/横屏不提供 Web 登录入口（网页太大），改用扫码 / Cookie
+  var isPhone = MediaQuery.of(Get.context!).orientation == Orientation.portrait;
   Utils.showBottomSheet(
     title: "登录斗鱼",
     child: Column(
@@ -24,16 +26,17 @@ void showDouyuLoginSheet() {
             Get.toNamed(RoutePath.kDouyuQRLogin);
           },
         ),
-        ListTile(
-          leading: const Icon(Icons.account_circle_outlined),
-          title: const Text("Web登录"),
-          subtitle: const Text("账号密码 / 手机验证码登录"),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () {
-            Get.back();
-            Get.toNamed(RoutePath.kDouyuWebLogin);
-          },
-        ),
+        if (isPhone)
+          ListTile(
+            leading: const Icon(Icons.account_circle_outlined),
+            title: const Text("Web登录"),
+            subtitle: const Text("账号密码 / 手机验证码登录（仅移动端显示）"),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Get.back();
+              Get.toNamed(RoutePath.kDouyuWebLogin);
+            },
+          ),
         ListTile(
           leading: const Icon(Icons.edit_outlined),
           title: const Text("Cookie登录"),

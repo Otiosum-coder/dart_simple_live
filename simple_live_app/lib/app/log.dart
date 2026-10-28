@@ -20,9 +20,18 @@ class Log {
     logFileWriter = null;
   }
 
+  /// 单行日志最大长度：有些接口响应/缓存 JSON 几十 KB，
+  /// 原样写会撑爆日志文件，这里截断
+  static const int _maxLogLength = 4000;
+
   static void writeLog(content, [Level level = Level.info]) {
+    var text = content.toString();
+    if (text.length > _maxLogLength) {
+      text = text.substring(0, _maxLogLength) +
+          "…<已截断，原长 ${content.toString().length}>";
+    }
     logFileWriter
-        ?.write("[${level.name.toUpperCase()}] $_currentTime：$content");
+        ?.write("[${level.name.toUpperCase()}] $_currentTime：$text");
   }
 
   static RxList<DebugLogModel> debugLogs = <DebugLogModel>[].obs;
@@ -66,7 +75,6 @@ class Log {
     addDebugLog(message, Colors.blue);
     logger.i("${DateTime.now().toString()}\n$message");
     if (writeFile) {
-      logFileWriter?.write("[INFO] $_currentTime：$message");
       writeLog(message, Level.info);
     }
   }

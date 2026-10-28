@@ -2,14 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/utils.dart';
-import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
-/// 抖音登录方式选择：Web登录 / 自定义 ttwid
+/// 抖音登录方式选择：自定义 ttwid
 ///
-/// 抖音的纯 API 扫码已被官方风控封死（check_qrconnect 恒返回 4031），
-/// 所以不再提供扫码入口；WebView 登录页里仍然可以扫码，只是走网页。
+/// 抖音纯 API 扫码被风控封死（check_qrconnect 恒返回 4031），
+/// 移动端/桌面端也都没有可用的网页登录页（官方只允许 App 内登录），
+/// 所以这里只保留 ttwid 配置（决定画质）。
 ///
 /// 注意「登录」和「ttwid」是两件事：
 /// * ttwid 决定能不能看全部画质（含蓝光），不登录也能用；
@@ -20,16 +20,6 @@ void showDouyinLoginSheet() {
     child: Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        ListTile(
-          leading: const Icon(Icons.account_circle_outlined),
-          title: const Text("Web登录"),
-          subtitle: const Text("手机验证码 / 密码登录"),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () {
-            Get.back();
-            Get.toNamed(RoutePath.kDouyinWebLogin);
-          },
-        ),
         ListTile(
           leading: const Icon(Icons.edit_outlined),
           title: const Text("配置 ttwid"),

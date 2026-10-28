@@ -45,7 +45,9 @@ class HomeController extends GetxController
   }
 
   void toSearch() {
-    Get.toNamed(RoutePath.kSearch);
+    // 带上当前选中的平台：搜索页默认打开对应平台，而不是永远从哔哩哔哩开始
+    var current = Sites.supportSites[tabController.index];
+    Get.toNamed(RoutePath.kSearch, arguments: current.id);
   }
 
   @override

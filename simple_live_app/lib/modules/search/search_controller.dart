@@ -13,9 +13,23 @@ class AppSearchController extends GetxController
 
   var searchMode = 0.obs;
 
+  /// 初始平台下标（由首页传入当前选中的平台）
+  int initialIndex = 0;
+
   AppSearchController() {
-    tabController =
-        TabController(length: Sites.supportSites.length, vsync: this);
+    var args = Get.arguments;
+    if (args is String) {
+      var found = Sites.supportSites.indexWhere((e) => e.id == args);
+      if (found >= 0) {
+        initialIndex = found;
+      }
+    }
+    index = initialIndex;
+    tabController = TabController(
+      length: Sites.supportSites.length,
+      vsync: this,
+      initialIndex: initialIndex,
+    );
     tabController.animation?.addListener(() {
       var currentIndex = (tabController.animation?.value ?? 0).round();
       if (index == currentIndex) {
