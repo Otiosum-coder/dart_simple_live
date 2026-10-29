@@ -219,6 +219,37 @@ class Utils {
     return result;
   }
 
+  /// 从「Copy as cURL」的整段命令里提取 Cookie。
+  ///
+  /// 支持 `-b 'xxx'`、`-H 'cookie: xxx'`、`"cookie": "xxx"`，
+  /// 如果传入的本身就是 cookie 值则原样返回。
+  static String extractCookieFromText(String raw) {
+    var text = raw.trim();
+    if (text.isEmpty) {
+      return text;
+    }
+    var headerMatch = RegExp(r"-H\s+'cookie:\s*([^']+)'", caseSensitive: false)
+        .firstMatch(text);
+    if (headerMatch != null) {
+      return headerMatch.group(1)!.trim();
+    }
+    var bMatch = RegExp(r"-b\s+'([^']+)'").firstMatch(text);
+    if (bMatch != null) {
+      return bMatch.group(1)!.trim();
+    }
+    var bMatch2 = RegExp(r'-b\s+"([^"]+)"').firstMatch(text);
+    if (bMatch2 != null) {
+      return bMatch2.group(1)!.trim();
+    }
+    var jsonMatch =
+        RegExp(r'"?cookie"?\s*[:=]\s*"([^"]+)"', caseSensitive: false)
+            .firstMatch(text);
+    if (jsonMatch != null) {
+      return jsonMatch.group(1)!.trim();
+    }
+    return text;
+  }
+
   /// 文本编辑的弹窗
   /// - `content` 编辑框默认的内容
   /// - `title` 弹窗标题
@@ -231,29 +262,36 @@ class Utils {
     String confirm = '',
     String cancel = '',
     TextValidate? validate,
+    int maxLines = 1,
   }) async {
     final TextEditingController textEditingController =
         TextEditingController(text: content);
+    var multiLine = maxLines > 1;
     var result = await Get.dialog(
       AlertDialog(
         title: Text(title),
-        content: Padding(
-          padding: AppStyle.edgeInsetsT12,
-          child: TextField(
-            controller: textEditingController,
-            decoration: InputDecoration(
-              border: const OutlineInputBorder(),
-              //prefixText: title,
-              contentPadding: AppStyle.edgeInsetsA12,
-              hintText: hintText ?? title,
+        content: SingleChildScrollView(
+          child: Padding(
+            padding: AppStyle.edgeInsetsT12,
+            child: TextField(
+              controller: textEditingController,
+              decoration: InputDecoration(
+                border: const OutlineInputBorder(),
+                contentPadding: AppStyle.edgeInsetsA12,
+                hintText: hintText ?? title,
+              ),
+              minLines: multiLine ? 5 : 1,
+              maxLines: multiLine ? 8 : 1,
+              autofocus: true,
             ),
-            // style: TextStyle(
-            //     height: 1.0,
-            //     color: Get.isDarkMode ? Colors.white : Colors.black),
-            autofocus: true,
           ),
         ),
         actions: [
+          if (multiLine)
+            TextButton(
+              onPressed: () => textEditingController.clear(),
+              child: const Text("清空"),
+            ),
           TextButton(
             onPressed: Get.back,
             child: const Text("取消"),
@@ -270,8 +308,6 @@ class Utils {
           ),
         ],
       ),
-      // barrierColor:
-      //     Get.isDarkMode ? Colors.grey.withOpacity(.3) : Colors.black38,
     );
     return result;
   }

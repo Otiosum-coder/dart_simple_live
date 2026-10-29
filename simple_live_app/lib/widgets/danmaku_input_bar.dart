@@ -226,7 +226,8 @@ class _DanmakuInputBarState extends State<DanmakuInputBar> {
                     minimumSize: const Size(0, 34),
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(17),
+                      // 圆角矩形（原来 17 太圆，接近胶囊）
+                      borderRadius: BorderRadius.circular(8),
                     ),
                   ),
                   child: Text(

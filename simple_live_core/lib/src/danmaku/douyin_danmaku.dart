@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:simple_live_core/simple_live_core.dart';
 import 'package:simple_live_core/src/common/web_socket_util.dart';
+import 'package:simple_live_core/src/common/http_client.dart' as core;
 import 'package:simple_live_core/src/scripts/douyin_sign.dart';
 
 import 'proto/douyin.pb.dart';
@@ -42,11 +43,16 @@ class DouyinDanmaku implements LiveDanmaku {
   Function()? onReady;
   String serverUrl = "wss://webcast3-ws-web-lq.douyin.com/webcast/im/push/v2/";
   late DouyinDanmakuArgs danmakuArgs;
+
+  /// start() 之前的可空引用：UI 可能在 start() 之前就读 canSendDanmaku，
+  /// 直接用 late 字段会抛 LateInitializationError（表现为整页灰屏）
+  DouyinDanmakuArgs? _startedArgs;
   WebScoketUtils? webScoketUtils;
 
   @override
   Future start(dynamic args) async {
     danmakuArgs = args as DouyinDanmakuArgs;
+    _startedArgs = danmakuArgs;
     var ts = DateTime.now().millisecondsSinceEpoch;
     var uri = Uri.parse(serverUrl).replace(
       scheme: "wss",
@@ -293,12 +299,15 @@ class DouyinDanmaku implements LiveDanmaku {
     webScoketUtils?.sendMessage(obj.writeToBuffer());
   }
 
+  /// 抖音发弹幕：经过抓包与多轮验证，聊天接口会做浏览器环境校验
+  /// （同样的 Cookie + a_bogus + 完整请求头，浏览器能发、纯 HTTP 请求返回
+  /// 20003 User doesn't login）。纯 Dart 无法稳定通过，暂不提供发送能力。
   @override
   bool get canSendDanmaku => false;
 
   @override
   Future<String?> sendDanmaku(String message) async {
-    return "当前平台暂不支持发送弹幕";
+    return "抖音暂不支持发送弹幕（平台对非浏览器请求有风控校验）";
   }
 
   @override

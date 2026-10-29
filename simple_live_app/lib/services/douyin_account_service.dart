@@ -1,8 +1,10 @@
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/constant.dart';
+import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
+import 'package:simple_live_core/src/common/http_client.dart' as core_http;
 
 /// 抖音账号
 ///
@@ -36,6 +38,9 @@ class DouyinAccountService extends GetxService {
     hasCookie.value = cookie.isNotEmpty;
     parseLoginCookie();
     setSite();
+    if (logined.value) {
+      fetchNickname();
+    }
     super.onInit();
   }
 
@@ -78,6 +83,50 @@ class DouyinAccountService extends GetxService {
     name.value = hasSession ? "已登录" : "已登录（Cookie 不完整）";
   }
 
+  /// 拉取抖音昵称（登录态有效时可用）
+  ///
+  /// 实测：GET /aweme/v1/web/user/profile/self/ 带 Cookie 即返回用户信息，
+  /// 不需要 a_bogus 签名。
+  Future<void> fetchNickname() async {
+    if (!logined.value || loginCookie.isEmpty) {
+      return;
+    }
+    try {
+      var result = await core_http.HttpClient.instance.getJson(
+        "https://www.douyin.com/aweme/v1/web/user/profile/self/",
+        queryParameters: const {
+          "aid": "6383",
+          "device_platform": "web",
+          "channel": "channel_pc_web",
+          "pc_client_type": "1",
+          "version_code": "170400",
+          "version_name": "17.4.0",
+          "cookie_enabled": "true",
+          "platform": "PC",
+          "browser_language": "zh-CN",
+          "browser_platform": "Win32",
+          "browser_name": "Chrome",
+          "browser_version": "131.0.0.0",
+        },
+        header: {
+          "cookie": effectiveCookie,
+          "user-agent": DouyinSite.kDefaultUserAgent,
+          "referer": "https://www.douyin.com/",
+          "accept": "application/json, text/plain, */*",
+        },
+      );
+      var user = (result is Map) ? result["user"] : null;
+      var nickname = (user is Map) ? (user["nickname"]?.toString() ?? "") : "";
+      Log.i("抖音昵称接口：status=${(result is Map) ? result["status_code"] : "?"} "
+          "nickname=${nickname.isEmpty ? "空" : nickname}");
+      if (nickname.isNotEmpty) {
+        name.value = nickname;
+      }
+    } catch (e) {
+      Log.logPrint(e);
+    }
+  }
+
   void setSite() {
     var site = (Sites.allSites[Constant.kDouyin]!.liveSite as DouyinSite);
     site.cookie = effectiveCookie;
@@ -104,6 +153,9 @@ class DouyinAccountService extends GetxService {
         .setValue(LocalStorageService.kDouyinLoginCookie, loginCookie);
     parseLoginCookie();
     setSite();
+    if (logined.value) {
+      fetchNickname();
+    }
   }
 
   void clearCookie() {

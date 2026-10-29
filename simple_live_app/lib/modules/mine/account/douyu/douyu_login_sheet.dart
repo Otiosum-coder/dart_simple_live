@@ -57,11 +57,14 @@ Future showDouyuCookieDialog() async {
   var cookie = await Utils.showEditTextDialog(
     DouyuAccountService.instance.cookie,
     title: "请输入斗鱼Cookie",
-    hintText: "粘贴 www.douyu.com 的 Cookie",
+    hintText: "粘贴 www.douyu.com 的 Cookie（需含 acf_uid / acf_dmjwt_token）",
+    maxLines: 5,
   );
   if (cookie == null || cookie.isEmpty) {
     return;
   }
+  // 允许直接粘贴整段 cURL，自动取出 Cookie
+  cookie = Utils.extractCookieFromText(cookie);
   DouyuAccountService.instance.setCookie(cookie);
   if (DouyuAccountService.instance.logined.value) {
     SmartDialog.showToast(

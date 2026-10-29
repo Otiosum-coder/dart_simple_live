@@ -391,6 +391,24 @@ class DouyuDanmaku implements LiveDanmaku {
     _hbIts = 0;
   }
 
+  /// 把聊天回执错误码翻译成人话
+  String _chatresErrorText(int res) {
+    switch (res) {
+      case 356:
+        return "发送太频繁，被斗鱼冷却了，请等 1-2 分钟再试";
+      case 1:
+        return "发送失败：需要登录后发言";
+      case 12:
+        return "发送失败：你已被禁言";
+      case 13:
+        return "发送失败：发言等级不足";
+      case -1:
+        return "发送失败：发送超时或被平台限制";
+      default:
+        return "发送失败（res=$res）";
+    }
+  }
+
   /// 解析发送连接的下行包（loginres / keeplive / chatres / error）
   void _decodeSenderMessage(List<int> data) {
     try {
@@ -436,7 +454,7 @@ class DouyuDanmaku implements LiveDanmaku {
       if (type == "chatres") {
         var res = int.tryParse(jsonData["res"]?.toString() ?? "") ?? -1;
         CoreLog.i("斗鱼发送：收到 chatres res=$res");
-        _chatresCompleter?.complete(res == 0 ? null : "发送失败（res=$res）");
+        _chatresCompleter?.complete(res == 0 ? null : _chatresErrorText(res));
         _chatresCompleter = null;
         return;
       }
@@ -519,8 +537,13 @@ class DouyuDanmaku implements LiveDanmaku {
       if (identical(_chatresCompleter, completer)) {
         _chatresCompleter = null;
       }
-      return "发送超时：可能登录态被其它设备接管，或内容重复、发送过快";
+      return "发送超时：可能被斗鱼冷却了，请等 1-2 分钟再试（刚发的可能已上屏）";
     } finally {
+      // 广播先到时 chatres 的 Future 还在挂起，必须一起清掉，
+      // 否则下一条会一直提示「上一条弹幕还在发送中」
+      if (identical(_chatresCompleter, completer)) {
+        _chatresCompleter = null;
+      }
       _broadcastCompleter = null;
       _pendingBroadcastText = null;
     }

@@ -156,6 +156,35 @@ class LiveRoomPage extends GetView<LiveRoomController> {
   }
 
   Widget buildTabletUI(BuildContext context) {
+    var panelWidth = (MediaQuery.sizeOf(context).width * 0.36)
+        .clamp(200.0, 300.0);
+    // 桌面端：右侧面板贯通到底，输入框属于「聊天」页；
+    // 左侧底栏只放操作按钮、宽度 = 视频区。
+    var isDesktop = !Platform.isAndroid && !Platform.isIOS;
+    if (isDesktop) {
+      return Row(
+        children: [
+          Expanded(
+            child: Column(
+              children: [
+                Expanded(child: buildMediaPlayer(context)),
+                buildBottomActionsBar(context),
+              ],
+            ),
+          ),
+          SizedBox(
+            width: panelWidth,
+            child: Column(
+              children: [
+                buildUserProfile(context),
+                buildMessageArea(),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+    // 移动端：保持原有布局（底栏横跨整个窗口，输入框在最右侧）
     return Column(
       children: [
         Expanded(
@@ -165,10 +194,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                 child: buildMediaPlayer(context),
               ),
               SizedBox(
-                // 面板宽度自适应：桌面端仍是 300；移动端按屏宽比例算并限制在 200-300，
-                // 否则手机横屏（逻辑宽约 700）时 300 会占掉 43%，SC 卡片看起来过长
-                width: (MediaQuery.sizeOf(context).width * 0.36)
-                    .clamp(200.0, 300.0),
+                width: panelWidth,
                 child: Column(
                   children: [
                     buildUserProfile(context),
@@ -179,90 +205,98 @@ class LiveRoomPage extends GetView<LiveRoomController> {
             ],
           ),
         ),
-        Container(
-          decoration: BoxDecoration(
-            color: Theme.of(context).cardColor,
-            border: Border(
-              top: BorderSide(
-                color: Colors.grey.withAlpha(25),
-              ),
-            ),
-          ),
-          padding: AppStyle.edgeInsetsV4.copyWith(
-            bottom: AppStyle.bottomBarHeight + 4,
-          ),
-          child: Row(
-            children: [
-              TextButton.icon(
-                style: TextButton.styleFrom(
-                  textStyle: const TextStyle(fontSize: 14),
-                ),
-                onPressed: controller.refreshRoom,
-                icon: const Icon(Remix.refresh_line),
-                label: const Text("刷新"),
-              ),
-              AppStyle.hGap4,
-              Obx(
-                () => controller.followed.value
-                    ? TextButton.icon(
-                        style: TextButton.styleFrom(
-                          textStyle: const TextStyle(fontSize: 14),
-                        ),
-                        onPressed: controller.removeFollowUser,
-                        icon: const Icon(Remix.heart_fill),
-                        label: const Text("取消关注"),
-                      )
-                    : TextButton.icon(
-                        style: TextButton.styleFrom(
-                          textStyle: const TextStyle(fontSize: 14),
-                        ),
-                        onPressed: controller.followUser,
-                        icon: const Icon(Remix.heart_line),
-                        label: const Text("关注"),
-                      ),
-              ),
-              const Expanded(child: Center()),
-              TextButton.icon(
-                style: TextButton.styleFrom(
-                  textStyle: const TextStyle(fontSize: 14),
-                ),
-                onPressed: controller.share,
-                icon: const Icon(Remix.share_line),
-                label: const Text("分享"),
-              ),
-              TextButton.icon(
-                style: TextButton.styleFrom(
-                  textStyle: const TextStyle(fontSize: 14),
-                ),
-                onPressed: controller.copyUrl,
-                icon: const Icon(Remix.file_copy_line),
-                label: const Text("复制链接"),
-              ),
-              TextButton.icon(
-                style: TextButton.styleFrom(
-                  textStyle: const TextStyle(fontSize: 14),
-                ),
-                onPressed: controller.copyPlayUrl,
-                icon: const Icon(Remix.file_copy_line),
-                label: const Text("复制播放直链"),
-              ),
-              // 桌面/横屏：输入框贴窗口底，宽度与右侧面板完全一致
-              Obx(
-                () => !AppSettingsController.instance.playerSendDanmaku.value
-                    ? const SizedBox.shrink()
-                    : SizedBox(
-                        width: (MediaQuery.sizeOf(context).width * 0.36)
-                            .clamp(200.0, 300.0),
-                        child: DanmakuInputBar(
-                          controller: controller,
-                          overlay: true,
-                        ),
-                      ),
-              ),
-            ],
+        buildBottomActionsBar(context, includeInput: true),
+      ],
+    );
+  }
+
+  /// 底部操作条
+  ///
+  /// * 桌面端：只占视频区宽度，不含输入框（输入框在聊天页内）
+  /// * 移动端横屏：横跨整个窗口，最右侧是输入框（保持原布局）
+  Widget buildBottomActionsBar(BuildContext context, {bool includeInput = false}) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        border: Border(
+          top: BorderSide(
+            color: Colors.grey.withAlpha(25),
           ),
         ),
-      ],
+      ),
+      padding: AppStyle.edgeInsetsV4.copyWith(
+        bottom: AppStyle.bottomBarHeight + 4,
+      ),
+      child: Row(
+        children: [
+          TextButton.icon(
+            style: TextButton.styleFrom(
+              textStyle: const TextStyle(fontSize: 14),
+            ),
+            onPressed: controller.refreshRoom,
+            icon: const Icon(Remix.refresh_line),
+            label: const Text("刷新"),
+          ),
+          AppStyle.hGap4,
+          Obx(
+            () => controller.followed.value
+                ? TextButton.icon(
+                    style: TextButton.styleFrom(
+                      textStyle: const TextStyle(fontSize: 14),
+                    ),
+                    onPressed: controller.removeFollowUser,
+                    icon: const Icon(Remix.heart_fill),
+                    label: const Text("取消关注"),
+                  )
+                : TextButton.icon(
+                    style: TextButton.styleFrom(
+                      textStyle: const TextStyle(fontSize: 14),
+                    ),
+                    onPressed: controller.followUser,
+                    icon: const Icon(Remix.heart_line),
+                    label: const Text("关注"),
+                  ),
+          ),
+          const Expanded(child: Center()),
+          TextButton.icon(
+            style: TextButton.styleFrom(
+              textStyle: const TextStyle(fontSize: 14),
+            ),
+            onPressed: controller.share,
+            icon: const Icon(Remix.share_line),
+            label: const Text("分享"),
+          ),
+          TextButton.icon(
+            style: TextButton.styleFrom(
+              textStyle: const TextStyle(fontSize: 14),
+            ),
+            onPressed: controller.copyUrl,
+            icon: const Icon(Remix.file_copy_line),
+            label: const Text("复制链接"),
+          ),
+          TextButton.icon(
+            style: TextButton.styleFrom(
+              textStyle: const TextStyle(fontSize: 14),
+            ),
+            onPressed: controller.copyPlayUrl,
+            icon: const Icon(Remix.file_copy_line),
+            label: const Text("复制播放直链"),
+          ),
+          if (includeInput)
+            Obx(
+              () => !AppSettingsController.instance.playerSendDanmaku.value
+                  ? const SizedBox.shrink()
+                  : SizedBox(
+                      width: (MediaQuery.sizeOf(context).width * 0.36)
+                          .clamp(200.0, 300.0),
+                      child: DanmakuInputBar(
+                        controller: controller,
+                        overlay: true,
+                      ),
+                    ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -720,8 +754,11 @@ class LiveRoomPage extends GetView<LiveRoomController> {
         if (!enabled) {
           return const SizedBox.shrink();
         }
-        // 竖屏：输入框在聊天页底部；桌面/横屏放到窗口底栏，聊天页不重复
-        if (MediaQuery.of(Get.context!).orientation != Orientation.portrait) {
+        var portrait =
+            MediaQuery.of(Get.context!).orientation == Orientation.portrait;
+        var isDesktop = !Platform.isAndroid && !Platform.isIOS;
+        // 竖屏 + 桌面端：输入框在聊天页底部；移动端横屏仍在窗口底栏
+        if (!portrait && !isDesktop) {
           return const SizedBox.shrink();
         }
         return DanmakuInputBar(controller: controller);

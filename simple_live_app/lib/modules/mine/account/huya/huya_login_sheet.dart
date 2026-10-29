@@ -8,7 +8,7 @@ import 'package:simple_live_app/services/huya_account_service.dart';
 /// 虎牙登录方式选择
 ///
 /// * 扫码登录：原生纯 API（推荐，已打通）
-/// * Cookie登录：手动粘贴（网页登录已被移除：虎牙没有移动端登录页）
+/// * Cookie登录：手动粘贴
 void showHuyaLoginSheet() {
   Utils.showBottomSheet(
     title: "登录虎牙",
@@ -46,10 +46,13 @@ Future showHuyaCookieDialog() async {
     HuyaAccountService.instance.cookie,
     title: "请输入虎牙Cookie",
     hintText: "粘贴 www.huya.com 的 Cookie（需含 udb_uid）",
+    maxLines: 5,
   );
   if (cookie == null || cookie.isEmpty) {
     return;
   }
+  // 允许直接粘贴整段 cURL，自动取出 Cookie
+  cookie = Utils.extractCookieFromText(cookie);
   HuyaAccountService.instance.setCookie(cookie);
   if (HuyaAccountService.instance.logined.value) {
     SmartDialog.showToast(

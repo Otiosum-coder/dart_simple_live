@@ -432,57 +432,6 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   /// 弹幕会话被其他设备接管（斗鱼单会话限制）：显示状态条引导重新登录
   var danmakuSessionLost = false.obs;
 
-  /// 斗鱼发送前提示：发送会接管账号的弹幕会话，可能断开其他设备的弹幕
-  /// 返回 true = 继续发送；false = 用户取消
-  Future<bool> _confirmDouyuSession() async {
-    var noMore = false;
-    var result = await SmartDialog.show<bool>(
-      clickMaskDismiss: false,
-      builder: (_) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-          title: const Text("发送弹幕会接管账号的弹幕会话"),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                "其他设备（浏览器 / 官方客户端）的弹幕连接会被断开，直到它们点「重试」。",
-              ),
-              AppStyle.vGap8,
-              Row(
-                children: [
-                  Checkbox(
-                    value: noMore,
-                    onChanged: (v) {
-                      setState(() => noMore = v ?? false);
-                    },
-                  ),
-                  const Expanded(
-                    child: Text("不再提示（可在「设置 - 播放设置」中恢复）"),
-                  ),
-                ],
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => SmartDialog.dismiss(result: false),
-              child: const Text("取消"),
-            ),
-            TextButton(
-              onPressed: () => SmartDialog.dismiss(result: true),
-              child: const Text("继续发送"),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (noMore) {
-      AppSettingsController.instance.setDanmakuSendKickWarn(false);
-    }
-    return result ?? false;
-  }
-
   /// 发送弹幕：成功返回 null，失败返回可展示的原因
   Future<String?> sendDanmaku(String text) async {
     var message = text.trim();
@@ -505,15 +454,6 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     var last = _lastSendTime;
     if (last != null && DateTime.now().difference(last).inSeconds < 2) {
       return "发送太快了，请稍后再试";
-    }
-    // 斗鱼：发送会抢会话，先确认（用户可勾"不再提示"）
-    if (site.id == Constant.kDouyu &&
-        AppSettingsController.instance.danmakuSendKickWarn.value) {
-      var go = await _confirmDouyuSession();
-      if (!go) {
-        // 空字符串 = 用户主动取消，输入框保留内容、不弹错误
-        return "";
-      }
     }
     Log.i("发送弹幕[${site.id}]：$message");
     // 先记录，供 onWSMessage 判断“这条是我刚发的”（广播可能比回执先到）
@@ -538,6 +478,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
             userName: _selfName(),
             message: message,
             color: LiveMessageColor.white,
+            // 本地回显也要标成“自己发的”，否则滚动弹幕没有描边样式
+            isSelf: true,
           ),
         );
       });

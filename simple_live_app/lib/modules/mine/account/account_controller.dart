@@ -74,11 +74,13 @@ class AccountController extends GetxController {
     var cookie = await Utils.showEditTextDialog(
       "",
       title: "请输入Cookie",
-      hintText: "请输入Cookie",
+      hintText: "粘贴 www.bilibili.com 的完整 Cookie（需含 SESSDATA）",
+      maxLines: 5,
     );
     if (cookie == null || cookie.isEmpty) {
       return;
     }
+    cookie = Utils.extractCookieFromText(cookie);
     BiliBiliAccountService.instance.setCookie(cookie);
     await BiliBiliAccountService.instance.loadUserInfo();
   }

@@ -166,16 +166,6 @@ class PlaySettingsPage extends GetView<AppSettingsController> {
                     },
                   ),
                 ),
-                Obx(
-                  () => SettingsSwitch(
-                    title: "斗鱼发送前提示",
-                    subtitle: "提示发送会接管账号弹幕会话，可断开其他设备的弹幕",
-                    value: controller.danmakuSendKickWarn.value,
-                    onChanged: (e) {
-                      controller.setDanmakuSendKickWarn(e);
-                    },
-                  ),
-                ),
               ],
             ),
           ),
