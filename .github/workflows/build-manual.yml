@@ -9,7 +9,7 @@ name: build-manual
 #   Android  ：正式签名（需配置 KEYSTORE_BASE64 等 secrets，否则为 debug 签名）
 #   Windows  ：预下载 mpv/ANGLE 运行库，规避 CI 上下载抖动；固定 windows-2022 规避 VS18 的 C2338
 #   Linux    ：需要系统 libmpv；产物为 zip
-#   macOS    ：产物（macos-13），仅手动触发；未公证，首次打开需右键 → 打开
+#   macOS    ：产物（macos-15 = Apple Silicon / macos-15-intel = x86_64），仅手动触发；未公证，首次打开需右键 → 打开
 #   iOS      ：未签名 ipa，需用 AltStore / Sideloadly 等工具自签安装
 on:
   workflow_dispatch:
@@ -288,12 +288,20 @@ jobs:
 
   # ---------------------------------------------------------------- macOS
   build-macos:
-    # 只在手动触发且勾选时构建：macOS arm64 Runner 容量长期紧张，
+    # 只在手动触发且勾选时构建：macOS Runner 容量紧张，
     # 打 tag 自动构建会因抢不到机器而失败，拖累整个 Release
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_macos }}
     continue-on-error: true
-    # macos-13（Intel x64）排队情况明显好于 arm64 的 macos-latest
-    runs-on: macos-13
+    # macos-13 已于 2025-09 退役：改用 macos-15（Apple Silicon）+ macos-15-intel（x86_64）
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            arch: arm64
+          - os: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -325,12 +333,12 @@ jobs:
       - name: 打包为 zip（-y 保留符号链接，否则 .app 会损坏）
         run: |
           cd simple_live_app/build/macos/Build/Products/Release
-          zip -q -r -y "SimpleLive-${{ steps.version.outputs.VERSION }}-macos-arm64.zip" *.app
+          zip -q -r -y "SimpleLive-${{ steps.version.outputs.VERSION }}-macos-${{ matrix.arch }}.zip" *.app
 
       - name: 上传 macOS（Artifacts）
         uses: actions/upload-artifact@v4
         with:
-          name: macos-${{ steps.version.outputs.VERSION }}
+          name: macos-${{ matrix.arch }}-${{ steps.version.outputs.VERSION }}
           path: simple_live_app/build/macos/Build/Products/Release/*.zip
           if-no-files-found: error
 
@@ -347,7 +355,8 @@ jobs:
     # 同 macOS：仅手动触发；iOS 也要 macOS Runner，容量紧张时不参与自动发布
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_ios }}
     continue-on-error: true
-    runs-on: macos-13
+    # macos-13 已退役，macos-15 自带 Xcode 16.x，可直接跑 Flutter 3.38 的 iOS 构建
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
