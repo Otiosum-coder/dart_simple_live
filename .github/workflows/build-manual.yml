@@ -325,6 +325,16 @@ jobs:
           cd simple_live_app
           flutter pub get
 
+      - name: 选择最新 Xcode
+        # connectivity_plus 7.1+ 用到 NWPath.isUltraConstrained，必须 Xcode 26+
+        # macos-15 镜像默认 Xcode 16.4，这里切到已安装的最新版本
+        shell: bash
+        run: |
+          echo "可用 Xcode："; ls -d /Applications/Xcode_*.app || true
+          NEWEST=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$NEWEST" ]; then sudo xcode-select -s "$NEWEST"; fi
+          xcodebuild -version
+
       - name: 构建 macOS
         run: |
           cd simple_live_app
@@ -376,6 +386,16 @@ jobs:
         run: |
           cd simple_live_app
           flutter pub get
+
+      - name: 选择最新 Xcode
+        # connectivity_plus 7.1+ 用到 NWPath.isUltraConstrained，必须 Xcode 26+
+        # macos-15 镜像默认 Xcode 16.4，这里切到已安装的最新版本
+        shell: bash
+        run: |
+          echo "可用 Xcode："; ls -d /Applications/Xcode_*.app || true
+          NEWEST=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$NEWEST" ]; then sudo xcode-select -s "$NEWEST"; fi
+          xcodebuild -version
 
       - name: 构建 iOS（不签名）
         run: |
