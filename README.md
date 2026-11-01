@@ -22,40 +22,53 @@
 - **只播放声音**：一键关闭画面只保留声音；与音频线路联动 —— 选音频线路会自动开启，切回普通线路会自动关闭。
 - **后台播放**：退到后台或锁屏后继续播放，Android 端以低优先级通知常驻，不易被系统回收。
 
+### 弹幕
+- **发送弹幕**：哔哩哔哩、斗鱼、虎牙均可在直播间直接发送弹幕。
+  斗鱼发送贴近官方客户端：登录态临近过期自动静默续期，平台限流或回执超时按「已发出」处理，不会频繁弹错。
 - **弹幕表情渲染**：聊天区与画面上的弹幕都能显示平台表情。
-  B站使用弹幕自带的表情图，抖音使用内置表情包（无需联网加载）。
+  B站支持**直播间专属表情包**（进房间后自动拉取该房间的表情表，按原图比例缩放），抖音使用内置表情包（无需联网加载）。
+- **屏蔽图片表情**：「弹幕设置」里可一键屏蔽 B站直播间专属表情包（全站表情与 emoji 不受影响）。
+- **关键词屏蔽**：按关键词过滤弹幕。
 
 ### 直播间信息
 - **开播时长**：直播中显示主播已经开播了多久。
 - **上次开播时间**：未开播时显示主播上一次开播的时间（多久之前 + 具体日期时间）。
-- **醒目留言（SC）**：直播间画面内可显示醒目留言内容。
+- **醒目留言（SC）**：直播间画面内可显示醒目留言内容；画面内的 SC 卡片为半透明浮层，10 秒后自动消失，不挡画面。
 
 ### 分区与列表
 - **关注列表**：对不同平台的主播可以进行筛选。未开播的直播间弱化显示，更容易找到正在直播的主播。
 - **局域网同步**：可在两台设备间同步关注、标签、观看记录；
   **同步方向可自选**（本机覆盖对方 / 对方覆盖本机），设备列表会显示双方关注数量便于判断。
+- **搜索联动**：首页搜索默认在当前所在平台内搜索。
 
 ### 账号
 - **哔哩哔哩**：支持扫码、网页、Cookie 三种登录方式，登录状态更稳定。
 - **斗鱼**：支持扫码登录，也可手动填写 Cookie。
-- **抖音**：支持填写完整 Cookie，或仅填写 ttwid。
-- **虎牙**：无需登录。
+- **虎牙**：支持扫码登录，也可手动填写 Cookie（发送弹幕需要登录）。
+- **抖音**：支持填写完整 Cookie，或仅填写 ttwid；登录后显示账号昵称。
+- **Cookie 输入**：支持多行粘贴，可直接粘贴整段 cURL 自动提取 Cookie。
+
+### 界面
+- **桌面端布局**：左侧视频 + 底栏操作条，右侧面板贯通到底；弹幕输入框归入「聊天」页，输入框与右侧面板严格等宽。
+- **移动端**：横屏弹幕输入框在底栏，竖屏归入聊天页，与原版一致。
 
 ## 支持平台
 
 | 平台 | 直播 | 弹幕 | 发送弹幕 | 音频线路 |
 | --- | :---: | :---: | :---: | :---: |
 | 哔哩哔哩 | ✅ | ✅ | ✅ | — |
-| 斗鱼 | ✅ | ✅ | — | ✅ |
-| 虎牙 | ✅ | ✅ | — | — |
-| 抖音 | ✅ | ✅ | — | — |
+| 斗鱼 | ✅ | ✅ | ✅ | ✅ |
+| 虎牙 | ✅ | ✅ | ✅ | — |
+| 抖音 | ✅ | ✅ | ❌（平台风控，暂不支持） | — |
 
 ## 客户端
 
 - [x] Android（已验证）
 - [x] Windows（已验证）
+- [x] macOS（CI 构建，Apple 芯片 / Intel 双架构，未签名）
+- [x] iOS（CI 构建未签名 ipa，需自行签名后安装）
 - [x] Linux（CI 构建，未广泛实机验证）
-- [ ] iOS / macOS / Android TV（暂未提供构建）
+- [ ] Android TV（暂未提供构建）
 
 ## 下载
 
@@ -67,10 +80,14 @@
 | Android（老设备） | `SimpleLive-x.y.z-armeabi-v7a.apk` | 32 位 ARM |
 | Android（模拟器） | `SimpleLive-x.y.z-x86_64.apk` | x86 设备 / 模拟器 |
 | **Windows** | `SimpleLive-x.y.z-windows-x64.zip` | 解压后运行 `simple_live_app.exe`，**整个文件夹需一起保留** |
+| **macOS**（Apple 芯片） | `SimpleLive-x.y.z-macos-arm64.zip` | 解压得到 `.app`，未签名，首次打开需右键 → 打开 |
+| **macOS**（Intel） | `SimpleLive-x.y.z-macos-x64.zip` | 同上，适用于 Intel Mac |
+| **iOS** | `SimpleLive-x.y.z-ios-no-sign.ipa` | 未签名，需自行签名（如 sideloadly / AltStore）后安装 |
 | **Linux** | `SimpleLive-x.y.z-linux-x64.zip` | 解压后运行 `bundle/simple_live_app` |
 
 > APK 使用正式签名，可直接覆盖安装升级，无需卸载旧版本。
-> Linux 版本由 CI 构建，尚未经过广泛实机验证，遇到问题欢迎提 issue。
+> macOS / iOS 产物由 GitHub 托管 Runner 构建，**未签名**，需要自行处理系统安全提示或签名。
+> macOS / iOS 的 CI 构建仅在手动触发时执行（GitHub macOS Runner 容量紧张），个别版本可能没有对应产物。
 
 ## 自行编译
 
@@ -87,6 +104,13 @@ flutter build apk --release --split-per-abi
 set CL=/utf-8
 flutter build windows --release
 
+# macOS（connectivity_plus 7.1+ 需要 Xcode 26 SDK，务必先切到 Xcode 26）
+sudo xcode-select -s /Applications/Xcode_26.3.app
+flutter build macos --release
+
+# iOS（不签名 ipa）
+flutter build ios --release --no-codesign
+
 # Linux（需要系统依赖）
 sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libasound2-dev libmpv-dev
 flutter build linux --release
@@ -95,7 +119,7 @@ flutter build linux --release
 ## 项目结构
 
 - `simple_live_core`：核心库，各直播平台的信息获取与弹幕解析。
-- `simple_live_app`：Flutter 客户端（Android / Windows 等）。
+- `simple_live_app`：Flutter 客户端（Android / Windows / macOS / iOS / Linux）。
 - `simple_live_app/third_party/canvas_danmaku`：支持表情的弹幕渲染库。
 - `simple_live_console` / `simple_live_tv_app`：原项目的控制台与 TV 客户端，本版本未改动。
 
