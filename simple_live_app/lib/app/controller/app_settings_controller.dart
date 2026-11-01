@@ -35,6 +35,8 @@ class AppSettingsController extends GetxController {
         .getValue(LocalStorageService.kDanmuSpeed, 10.0);
     danmuEnable.value = LocalStorageService.instance
         .getValue(LocalStorageService.kDanmuEnable, true);
+    danmuBlockRoomEmoji.value = LocalStorageService.instance
+        .getValue(LocalStorageService.kDanmuBlockRoomEmoji, false);
     danmuStrokeWidth.value = LocalStorageService.instance
         .getValue(LocalStorageService.kDanmuStrokeWidth, 2.0);
     danmuTopMargin.value = LocalStorageService.instance
@@ -306,6 +308,14 @@ class AppSettingsController extends GetxController {
   void setDanmuEnable(bool e) {
     danmuEnable.value = e;
     LocalStorageService.instance.setValue(LocalStorageService.kDanmuEnable, e);
+  }
+
+  /// 屏蔽直播间专属图片表情弹幕（仅对 B站 生效，全局，默认关闭）
+  var danmuBlockRoomEmoji = false.obs;
+  void setDanmuBlockRoomEmoji(bool e) {
+    danmuBlockRoomEmoji.value = e;
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kDanmuBlockRoomEmoji, e);
   }
 
   var danmuStrokeWidth = 2.0.obs;

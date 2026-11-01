@@ -36,11 +36,15 @@ class DanmakuContentPart {
   final String? text;
   final String? imageUrl;
 
-  const DanmakuContentPart._(this.text, this.imageUrl);
+  /// 表情图相对普通表情的放大倍数（B站大表情用）
+  final double scale;
+
+  const DanmakuContentPart._(this.text, this.imageUrl, [this.scale = 1]);
 
   const DanmakuContentPart.text(String text) : this._(text, null);
 
-  const DanmakuContentPart.image(String imageUrl) : this._(null, imageUrl);
+  const DanmakuContentPart.image(String imageUrl, {double scale = 1})
+      : this._(null, imageUrl, scale);
 
   bool get isImage => imageUrl != null && imageUrl!.trim().isNotEmpty;
   bool get isText => text != null && text!.isNotEmpty;

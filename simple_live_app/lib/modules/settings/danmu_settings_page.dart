@@ -31,9 +31,13 @@ class DanmuSettingsPage extends StatelessWidget {
 class DanmuSettingsView extends GetView<AppSettingsController> {
   final Function()? onTapDanmuShield;
   final DanmakuController? danmakuController;
+
+  /// 是否显示「屏蔽图片表情」开关（只对 B站 有意义，其他平台隐藏）
+  final bool showRoomEmojiBlock;
   const DanmuSettingsView({
     this.onTapDanmuShield,
     this.danmakuController,
+    this.showRoomEmojiBlock = true,
     super.key,
   });
 
@@ -59,6 +63,19 @@ class DanmuSettingsView extends GetView<AppSettingsController> {
                 onTap: onTapDanmuShield ??
                     () => Get.toNamed(RoutePath.kSettingsDanmuShield),
               ),
+              if (showRoomEmojiBlock) ...[
+                AppStyle.divider,
+                Obx(
+                  () => SettingsSwitch(
+                    title: "屏蔽图片表情",
+                    subtitle: "仅哔哩哔哩生效：屏蔽直播间专属表情包，全站表情不受影响",
+                    value: controller.danmuBlockRoomEmoji.value,
+                    onChanged: (e) {
+                      controller.setDanmuBlockRoomEmoji(e);
+                    },
+                  ),
+                ),
+              ],
             ],
           ),
         ),

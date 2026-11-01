@@ -39,11 +39,21 @@ class Utils {
       ),
       textDirection: TextDirection.ltr,
     )..layout();
-    final imageCount = imageUrlsForContent(content).length;
     final imageSize = fontSize * emojiScale;
+    var imageTotalWidth = 0.0;
+    var imageMaxSize = 0.0;
+    for (final part in parts) {
+      if (part.isImage && (part.imageUrl ?? "").trim().isNotEmpty) {
+        final size = imageSize * part.scale;
+        imageTotalWidth += size;
+        if (size > imageMaxSize) {
+          imageMaxSize = size;
+        }
+      }
+    }
     return Size(
-      textPainter.width + imageCount * imageSize,
-      textPainter.height > imageSize ? textPainter.height : imageSize,
+      textPainter.width + imageTotalWidth,
+      textPainter.height > imageMaxSize ? textPainter.height : imageMaxSize,
     );
   }
 
@@ -189,9 +199,10 @@ class Utils {
       if (part.isText) {
         builder.addText(part.text ?? "");
       } else if (part.isImage && (part.imageUrl ?? "").trim().isNotEmpty) {
+        final size = imageSize * part.scale;
         builder.addPlaceholder(
-          imageSize,
-          imageSize,
+          size,
+          size,
           ui.PlaceholderAlignment.middle,
         );
       }

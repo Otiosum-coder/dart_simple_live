@@ -59,6 +59,9 @@ class LocalStorageService extends GetxService {
   /// 弹幕开启
   static const String kDanmuEnable = "DanmuEnable";
 
+  /// 屏蔽直播间专属图片表情弹幕（仅 B站 生效，全局，默认关闭）
+  static const String kDanmuBlockRoomEmoji = "DanmuBlockRoomEmoji";
+
   /// 弹幕字重
   static const String kDanmuFontWeight = "DanmuFontWeight";
 

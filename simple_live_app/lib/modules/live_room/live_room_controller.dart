@@ -269,6 +269,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   /// 接收到WebSocket信息
   void onWSMessage(LiveMessage msg) {
     if (msg.type == LiveMessageType.chat) {
+      // 屏蔽直播间专属图片表情弹幕（弹幕设置 → 屏蔽图片表情，默认关闭）
+      if (msg.isRoomEmoji &&
+          AppSettingsController.instance.danmuBlockRoomEmoji.value) {
+        Log.d("屏蔽图片表情弹幕：${msg.message}");
+        return;
+      }
       var sentAt = _lastSentAt;
       if (_lastSentText.isNotEmpty &&
           msg.message == _lastSentText &&
@@ -313,7 +319,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       final contentParts = msg.spans
           ?.map(
             (e) => e.isImage
-                ? DanmakuContentPart.image(e.imageUrl!.trim())
+                ? DanmakuContentPart.image(
+                    e.imageUrl!.trim(),
+                    scale: e.imageScale ?? 1,
+                  )
                 : DanmakuContentPart.text(e.text ?? ""),
           )
           .toList();
@@ -1204,6 +1213,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         children: [
           DanmuSettingsView(
             danmakuController: danmakuController,
+            showRoomEmojiBlock: site.id == Constant.kBiliBili,
             onTapDanmuShield: () {
               Get.back();
               showDanmuShield();

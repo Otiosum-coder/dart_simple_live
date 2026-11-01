@@ -880,14 +880,16 @@ class LiveRoomPage extends GetView<LiveRoomController> {
         AppSettingsController.instance.chatTextSize.value * 1.45;
     return spans.map<InlineSpan>((span) {
       if (span.isImage) {
+        // 大表情（B站 height=162）按倍数放大，普通表情保持和文字同高
+        final size = emojiSize * (span.imageScale ?? 1);
         return WidgetSpan(
           alignment: PlaceholderAlignment.middle,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 2),
             child: NetImage(
               span.imageUrl!.trim(),
-              width: emojiSize,
-              height: emojiSize,
+              width: size,
+              height: size,
               fit: BoxFit.contain,
             ),
           ),
@@ -1171,14 +1173,6 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                 onTap: () {
                   Get.back();
                   controller.refreshRoom();
-                },
-              ),
-              ListTile(
-                leading: const Icon(Remix.share_line),
-                title: const Text("分享"),
-                onTap: () {
-                  Get.back();
-                  controller.share();
                 },
               ),
               const Divider(height: 1),

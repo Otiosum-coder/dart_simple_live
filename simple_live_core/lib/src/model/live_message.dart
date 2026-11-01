@@ -40,6 +40,12 @@ class LiveMessage {
   /// 富文本片段：按平台返回的顺序保存文字与表情图片，
   /// 聊天区可以把表情插回原来的位置。
   final List<LiveMessageSpan>? spans;
+
+  /// 整条内容是否只由「直播间专属图片表情」组成（B站 room_ 前缀）。
+  ///
+  /// 这类弹幕在客户端里只能单独发，用来做「屏蔽图片表情」的判定。
+  final bool isRoomEmoji;
+
   LiveMessage({
     required this.type,
     required this.userName,
@@ -49,6 +55,7 @@ class LiveMessage {
     this.isSelf = false,
     this.imageUrls,
     this.spans,
+    this.isRoomEmoji = false,
   });
 
   @override
@@ -70,13 +77,22 @@ class LiveMessageSpan {
   final String? text;
   final String? imageUrl;
 
-  const LiveMessageSpan.text(this.text) : imageUrl = null;
-  const LiveMessageSpan.image(this.imageUrl) : text = null;
+  /// 表情图相对普通表情的放大倍数（B站大表情 height 可达 162，普通表情约 48）
+  final double? imageScale;
+
+  const LiveMessageSpan.text(this.text)
+      : imageUrl = null,
+        imageScale = null;
+  const LiveMessageSpan.image(this.imageUrl, {this.imageScale}) : text = null;
 
   bool get isImage => imageUrl != null && imageUrl!.trim().isNotEmpty;
   bool get isText => text != null && text!.isNotEmpty;
 
-  Map<String, dynamic> toJson() => {"text": text, "imageUrl": imageUrl};
+  Map<String, dynamic> toJson() => {
+        "text": text,
+        "imageUrl": imageUrl,
+        "imageScale": imageScale,
+      };
 }
 
 class LiveMessageColor {
