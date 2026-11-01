@@ -99,6 +99,46 @@ class DouyuDanmakuArgs {
       return false;
     }
   }
+  /// 用新 cookie 重建发送凭证（dmjwt 刷新后调用）
+  ///
+  /// 只更新与发送相关的字段：房间号保持不变，
+  /// devid 在 cookie 里没有时沿用旧值（本地生成过的设备号）。
+  DouyuDanmakuArgs refreshedCookie(String cookie) {
+    var map = <String, String>{};
+    for (var part in cookie.split(";")) {
+      var index = part.indexOf("=");
+      if (index <= 0) {
+        continue;
+      }
+      map[part.substring(0, index).trim()] = part.substring(index + 1).trim();
+    }
+    String value(String key) {
+      var raw = map[key] ?? "";
+      try {
+        return Uri.decodeComponent(raw);
+      } catch (_) {
+        return raw;
+      }
+    }
+
+    var did = map["acf_did"] ?? map["dy_did"] ?? "";
+    var nick = value("acf_nickname");
+    var face = value("acf_avatar");
+    return DouyuDanmakuArgs(
+      roomId: roomId,
+      uid: map["acf_uid"] ?? uid,
+      devid: did.isNotEmpty ? did : devid,
+      nickname: nick.isNotEmpty ? nick : nickname,
+      avatar: face.isNotEmpty ? face : avatar,
+      username: map["acf_username"] ?? username,
+      jwt: value("acf_dmjwt_token"),
+      ltkid: value("acf_ltkid"),
+      biz: map["acf_biz"] ?? biz,
+      stk: value("acf_stk"),
+      cookie: cookie,
+    );
+  }
+
   @override
   String toString() {
     return json.encode({
@@ -202,6 +242,23 @@ class DouyuDanmaku implements LiveDanmaku {
   //   1. 发送必须用「独立连接」——往接收连接发 chatmsg 会被服务端静默丢弃
   //   2. 发送连接登录要带 jwt（cookie acf_dmjwt_token）+ ltkid/biz/stk + vk 签名
   //   3. 心跳必须带签名（getEncryption 取密钥 + nonce/its），否则会被踢下线
+  /// 登录 cookie 刷新后更新发送凭证（接收连接不用重连）
+  void updateCookie(String cookie) {
+    if (cookie.isEmpty) {
+      return;
+    }
+    danmakuArgs = danmakuArgs.refreshedCookie(cookie);
+    // 发送连接是用旧 jwt 鉴权的，丢掉重建，下次发送就用新 token 登录
+    _senderReady = false;
+    try {
+      _senderSocket?.close();
+    } catch (e) {
+      CoreLog.error(e);
+    }
+    _senderSocket = null;
+    CoreLog.i("斗鱼弹幕：cookie 已刷新 ${danmakuArgs.sendReadyDesc}");
+  }
+
   /// 是否显示输入框：斗鱼始终允许输入，
   /// 凭证不全时在 sendDanmaku 里给出「缺少哪些 cookie 字段」的明确提示，
   /// 比直接隐藏输入框更利于用户发现问题。
@@ -251,9 +308,9 @@ class DouyuDanmaku implements LiveDanmaku {
     if (_senderReady && _senderSocket?.status == SocketStatus.connected) {
       return null;
     }
-    // 最多尝试两次：第一次失败（例如上一台设备的会话还没释放）就重连再登录
+    // 最多尝试三次：上一次设备的会话可能还没释放，多抢一两次更容易成功
     String? lastError;
-    for (var attempt = 0; attempt < 2; attempt++) {
+    for (var attempt = 0; attempt < 3; attempt++) {
       lastError = await _tryLoginSender();
       if (lastError == null) {
         return null;
@@ -267,6 +324,8 @@ class DouyuDanmaku implements LiveDanmaku {
       }
       _senderSocket = null;
       _senderReady = false;
+      // 给服务端一点时间释放旧会话，再抢下一次
+      await Future.delayed(const Duration(milliseconds: 250));
     }
     return lastError;
   }
@@ -395,13 +454,14 @@ class DouyuDanmaku implements LiveDanmaku {
   String _chatresErrorText(int res) {
     switch (res) {
       case 356:
-        return "发送太频繁，被斗鱼冷却了，请等 1-2 分钟再试";
+        // 服务端明确拒绝这条内容/账号被限流；App 层会按「结果不确定」静默处理
+        return "斗鱼限流（res=356），这条可能没上屏";
       case 1:
-        return "发送失败：需要登录后发言";
+        return "发送失败：需要登录后发言（res=1）";
       case 12:
-        return "发送失败：你已被禁言";
+        return "发送失败：你已被禁言（res=12）";
       case 13:
-        return "发送失败：发言等级不足";
+        return "发送失败：发言等级不足（res=13）";
       case -1:
         return "发送失败：发送超时或被平台限制";
       default:

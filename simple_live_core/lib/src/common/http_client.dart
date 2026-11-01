@@ -3,6 +3,23 @@ import 'package:dio/dio.dart';
 
 import 'custom_interceptor.dart';
 
+/// 原始 HTTP 结果：需要读 Set-Cookie / 最终地址时用
+class RawHttpResult {
+  final int statusCode;
+  final List<String> setCookies;
+  final String body;
+
+  /// 跟随重定向后的最终地址
+  final String finalUrl;
+
+  RawHttpResult({
+    required this.statusCode,
+    required this.setCookies,
+    required this.body,
+    required this.finalUrl,
+  });
+}
+
 class HttpClient {
   static HttpClient? _httpUtil;
 
@@ -53,6 +70,35 @@ class HttpClient {
       } else {
         throw CoreError("发送GET请求失败");
       }
+    }
+  }
+
+  /// Get请求，返回原始结果（含 Set-Cookie 响应头）
+  /// * 用于「静默登录换 token」这类需要读 Set-Cookie 的场景
+  Future<RawHttpResult> getRaw(
+    String url, {
+    Map<String, dynamic>? header,
+  }) async {
+    try {
+      var result = await dio.get(
+        url,
+        options: Options(
+          responseType: ResponseType.plain,
+          headers: header ?? {},
+          // 4xx 也不抛异常，交给调用方判断
+          validateStatus: (status) => status != null && status < 500,
+        ),
+      );
+      var raw = result.headers["set-cookie"] ?? <String>[];
+      var cookies = raw.map((e) => e.toString()).toList();
+      return RawHttpResult(
+        statusCode: result.statusCode ?? 0,
+        setCookies: cookies,
+        body: result.data?.toString() ?? "",
+        finalUrl: result.realUri.toString(),
+      );
+    } catch (e) {
+      throw CoreError("发送GET请求失败");
     }
   }
 

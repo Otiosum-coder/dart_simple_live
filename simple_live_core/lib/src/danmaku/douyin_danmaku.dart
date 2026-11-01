@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:simple_live_core/simple_live_core.dart';
 import 'package:simple_live_core/src/common/web_socket_util.dart';
-import 'package:simple_live_core/src/common/http_client.dart' as core;
 import 'package:simple_live_core/src/scripts/douyin_sign.dart';
 
 import 'proto/douyin.pb.dart';

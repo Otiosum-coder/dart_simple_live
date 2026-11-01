@@ -2,13 +2,14 @@ name: build-manual
 
 # 两种触发方式：
 #   1) 手动触发（workflow_dispatch）：勾选需要的平台，产物只上传到 Artifacts（不创建 Release）
-#   2) 推送 tag（v*）          ：构建全部平台，并自动创建/更新 Release 并上传产物
+#   2) 推送 tag（v*）          ：自动构建 Android / Windows / Linux，创建/更新 Release
+#      （macOS、iOS 不参与自动发布：改用 macOS 托管 Runner 容量紧张，容易整次失败）
 #
 # 各平台说明：
 #   Android  ：正式签名（需配置 KEYSTORE_BASE64 等 secrets，否则为 debug 签名）
 #   Windows  ：预下载 mpv/ANGLE 运行库，规避 CI 上下载抖动；固定 windows-2022 规避 VS18 的 C2338
 #   Linux    ：需要系统 libmpv；产物为 zip
-#   macOS    ：arm64 产物（macos-latest），未公证，首次打开需右键 → 打开
+#   macOS    ：产物（macos-13），仅手动触发；未公证，首次打开需右键 → 打开
 #   iOS      ：未签名 ipa，需用 AltStore / Sideloadly 等工具自签安装
 on:
   workflow_dispatch:
@@ -287,8 +288,12 @@ jobs:
 
   # ---------------------------------------------------------------- macOS
   build-macos:
-    if: ${{ github.event_name == 'push' || inputs.build_macos }}
-    runs-on: macos-latest
+    # 只在手动触发且勾选时构建：macOS arm64 Runner 容量长期紧张，
+    # 打 tag 自动构建会因抢不到机器而失败，拖累整个 Release
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_macos }}
+    continue-on-error: true
+    # macos-13（Intel x64）排队情况明显好于 arm64 的 macos-latest
+    runs-on: macos-13
     steps:
       - uses: actions/checkout@v4
 
@@ -339,8 +344,10 @@ jobs:
 
   # ---------------------------------------------------------------- iOS
   build-ios:
-    if: ${{ github.event_name == 'push' || inputs.build_ios }}
-    runs-on: macos-latest
+    # 同 macOS：仅手动触发；iOS 也要 macOS Runner，容量紧张时不参与自动发布
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_ios }}
+    continue-on-error: true
+    runs-on: macos-13
     steps:
       - uses: actions/checkout@v4
 

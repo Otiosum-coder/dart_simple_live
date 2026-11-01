@@ -821,41 +821,6 @@ class LiveRoomPage extends GetView<LiveRoomController> {
   Widget buildChatTab() {
     return Column(
       children: [
-        // 弹幕会话被其他设备接管（斗鱼单会话限制）时提示，并可跳转重新登录
-        Obx(
-          () => !controller.danmakuSessionLost.value
-              ? const SizedBox.shrink()
-              : Container(
-                  width: double.infinity,
-                  color: Colors.orange.withAlpha(38),
-                  padding: const EdgeInsets.only(left: 12, right: 4, top: 2, bottom: 2),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.warning_amber_rounded,
-                        size: 18,
-                        color: Colors.orange,
-                      ),
-                      AppStyle.hGap8,
-                      const Expanded(
-                        child: Text(
-                          "弹幕会话已被其他设备接管，当前只能观看",
-                          style: TextStyle(fontSize: 12),
-                        ),
-                      ),
-                      TextButton(
-                        onPressed: () {
-                          Get.toNamed("/settings/account");
-                        },
-                        child: const Text(
-                          "重新登录斗鱼",
-                          style: TextStyle(fontSize: 12),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-        ),
         Expanded(
           child: Obx(
             () => Stack(

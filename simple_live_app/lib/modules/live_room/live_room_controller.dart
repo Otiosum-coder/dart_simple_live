@@ -429,8 +429,50 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   /// 上次发送弹幕的时间（本地节流，避免撞平台风控）
   DateTime? _lastSendTime;
 
-  /// 弹幕会话被其他设备接管（斗鱼单会话限制）：显示状态条引导重新登录
-  var danmakuSessionLost = false.obs;
+  /// 正在「静默抢回会话」自动重试（防止递归）
+  bool _autoRecoveringSession = false;
+
+  /// 正在发送的条数（并发上限 2，超出的静默忽略）
+  int _sendingCount = 0;
+
+  /// 斗鱼 dmjwt 快过期（或 [force] 时强制）先静默刷新登录态
+  ///
+  /// 成功返回 null；刷新失败会直接退出登录并返回提示文案。
+  Future<String?> _refreshDouyuTokenIfNeeded({bool force = false}) async {
+    if (site.id != Constant.kDouyu) {
+      return null;
+    }
+    var service = DouyuAccountService.instance;
+    if (!service.logined.value) {
+      return null;
+    }
+    if (!force && !service.needRefreshToken) {
+      return null;
+    }
+    Log.i("斗鱼 dmjwt 即将过期，静默刷新登录态");
+    var ok = await service.refreshToken();
+    if (ok) {
+      var danmaku = liveDanmaku;
+      if (danmaku is DouyuDanmaku) {
+        danmaku.updateCookie(service.cookie);
+      }
+      return null;
+    }
+    Log.i("斗鱼 dmjwt 刷新失败，自动退出登录");
+    service.logout();
+    return "斗鱼登录已过期，请重新登录斗鱼";
+  }
+
+  /// 斗鱼「结果不确定」类错误：内容没被明确拒绝就按成功处理
+  ///
+  /// 356（服务端限流/对该条不置可否）和 8 秒没等到回执都属于这类，
+  /// 官方客户端同样是发出去就不再管。
+  bool _isSilentSuccess(String error) {
+    if (site.id != Constant.kDouyu) {
+      return false;
+    }
+    return error.contains("res=356") || error.contains("发送超时");
+  }
 
   /// 发送弹幕：成功返回 null，失败返回可展示的原因
   Future<String?> sendDanmaku(String text) async {
@@ -444,9 +486,6 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (!liveDanmaku.canSendDanmaku) {
       return "当前平台暂不支持发送弹幕";
     }
-    if (!liveStatus.value) {
-      return "主播未开播，无法发送弹幕";
-    }
     var loginTip = _loginCheck();
     if (loginTip != null) {
       return loginTip;
@@ -455,16 +494,61 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (last != null && DateTime.now().difference(last).inSeconds < 2) {
       return "发送太快了，请稍后再试";
     }
+    // 并发上限 2 条，再多就静默忽略（不提示、不回显，等同丢弃）
+    if (_sendingCount >= 2) {
+      Log.i("发送弹幕：已有 2 条在发送中，本次静默忽略");
+      return null;
+    }
+    var tokenTip = await _refreshDouyuTokenIfNeeded();
+    if (tokenTip != null) {
+      return tokenTip;
+    }
     Log.i("发送弹幕[${site.id}]：$message");
     // 先记录，供 onWSMessage 判断“这条是我刚发的”（广播可能比回执先到）
     _lastSentText = message;
     _lastSentAt = DateTime.now();
     _lastSentEchoed = false;
-    var error = await liveDanmaku.sendDanmaku(message);
-    Log.i("发送弹幕[${site.id}]结果：${error ?? "成功"}");
+    _sendingCount++;
+    String? error;
+    try {
+      error = await liveDanmaku.sendDanmaku(message);
+      Log.i("发送弹幕[${site.id}]结果：${error ?? "成功"}");
+      // 被其它设备顶掉登录态时：不弹任何提示，直接静默重连抢回会话再发一次
+      if (error != null &&
+          _isSessionLostError(error) &&
+          !_autoRecoveringSession) {
+        Log.i("发送失败（会话被接管），静默重新抢会话后自动重试");
+        _autoRecoveringSession = true;
+        try {
+          await Future.delayed(const Duration(milliseconds: 300));
+          error = await liveDanmaku.sendDanmaku(message);
+          Log.i("静默重试结果：${error ?? "成功"}");
+        } finally {
+          _autoRecoveringSession = false;
+        }
+        if (error != null && _isSessionLostError(error)) {
+          // 还是不行：顺手强制刷新一次登录态（失败会自动退出登录），
+          // 这样用户重新登录后下一条就能正常发
+          var tip = await _refreshDouyuTokenIfNeeded(force: true);
+          if (tip != null) {
+            return tip;
+          }
+          // 刷新成功：用新 token 再发一次
+          await Future.delayed(const Duration(milliseconds: 300));
+          error = await liveDanmaku.sendDanmaku(message);
+          Log.i("刷新登录态后重试结果：${error ?? "成功"}");
+        }
+      }
+      // 斗鱼：356 / 超时属于「结果不确定」，按成功静默处理
+      if (error != null && _isSilentSuccess(error)) {
+        Log.i("发送结果不确定（$error），按成功静默处理");
+        error = null;
+      }
+    } finally {
+      _sendingCount--;
+    }
     if (error == null) {
       _lastSendTime = DateTime.now();
-      danmakuSessionLost.value = false;
       // 本地回显：等 1.5 秒，如果服务端没有把这条推回来，再自己补一条
       // （避免和真实推送重复）
       Future.delayed(const Duration(milliseconds: 1500), () {
@@ -483,13 +567,17 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
           ),
         );
       });
-    } else if (error.contains("4206") ||
-        error.contains("4205") ||
-        error.contains("已过期") ||
-        error.contains("被接管")) {
-      danmakuSessionLost.value = true;
     }
     return error;
+  }
+
+  /// 是否属于「登录态被顶/失效」类错误（这类才值得静默抢会话重试）
+  bool _isSessionLostError(String error) {
+    return error.contains("被接管") ||
+        error.contains("已过期") ||
+        error.contains("4205") ||
+        error.contains("4206") ||
+        error.contains("登录已在其它设备失效");
   }
 
   /// 自己发弹幕时用于本地回显的昵称
