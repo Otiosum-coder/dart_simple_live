@@ -39,12 +39,23 @@ class DanmakuContentPart {
   /// 表情图相对普通表情的放大倍数（B站大表情用）
   final double scale;
 
-  const DanmakuContentPart._(this.text, this.imageUrl, [this.scale = 1]);
+  /// 表情图原始宽高比（宽 / 高），非正方形素材按真实比例排版
+  final double ratio;
+
+  const DanmakuContentPart._(
+    this.text,
+    this.imageUrl, [
+    this.scale = 1,
+    this.ratio = 1,
+  ]);
 
   const DanmakuContentPart.text(String text) : this._(text, null);
 
-  const DanmakuContentPart.image(String imageUrl, {double scale = 1})
-      : this._(null, imageUrl, scale);
+  const DanmakuContentPart.image(
+    String imageUrl, {
+    double scale = 1,
+    double ratio = 1,
+  }) : this._(null, imageUrl, scale, ratio);
 
   bool get isImage => imageUrl != null && imageUrl!.trim().isNotEmpty;
   bool get isText => text != null && text!.isNotEmpty;

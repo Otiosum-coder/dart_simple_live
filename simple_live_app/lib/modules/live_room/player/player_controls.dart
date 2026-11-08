@@ -48,7 +48,7 @@ Widget buildFullControls(
   return DragToMoveArea(
     child: Stack(
       children: [
-        Container(),
+        Positioned.fill(child: buildNoPlaybackCover(controller)),
         buildDanmuView(videoState, controller),
 
         // 左下角SC显示（竖屏不显示）
@@ -429,6 +429,48 @@ Widget buildFullControls(
   );
 }
 
+/// 拿不到播放地址时的兜底背景（未开播 / 大航海等付费限定房间）
+///
+/// 刻意放在播放器控制层的最底层，而不是房间页 Stack 的上层，原因有两个：
+/// 1. 控制条、点击/双击/长按手势都在它上面，不会再被这张图盖住或者吃掉点击；
+/// 2. 它自己也套了 IgnorePointer，即使哪天被移到上层，点击也能穿透到播放器。
+///
+/// 图片用内置的「大航海专属」宣传图：试过用房间自己的封面 / room_info.keyframe，
+/// 大航海房拿到的那张不理想，所以固定用包内图。
+Widget buildNoPlaybackCover(LiveRoomController controller) {
+  return Obx(() {
+    var detail = controller.detail.value;
+    if (!controller.playUrlEmpty.value ||
+        detail == null ||
+        controller.loadError.value) {
+      return const SizedBox.shrink();
+    }
+    return IgnorePointer(
+      child: SizedBox.expand(
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Image.asset(
+              'assets/images/cover_fallback.png',
+              fit: BoxFit.cover,
+            ),
+            // 底部压一点暗色，让控制条的按钮在任何封面上都看得清
+            const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.center,
+                  end: Alignment.bottomCenter,
+                  colors: [Colors.transparent, Colors.black26],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  });
+}
+
 Widget buildLockButton(LiveRoomController controller) {
   return Center(
     child: InkWell(
@@ -464,7 +506,7 @@ Widget buildControls(
   GlobalKey volumeButtonkey = GlobalKey();
   return Stack(
     children: [
-      Container(),
+      Positioned.fill(child: buildNoPlaybackCover(controller)),
       buildDanmuView(videoState, controller),
 
       // 左下角SC显示（竖屏不显示）

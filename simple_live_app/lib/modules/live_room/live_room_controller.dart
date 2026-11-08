@@ -322,6 +322,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
                 ? DanmakuContentPart.image(
                     e.imageUrl!.trim(),
                     scale: e.imageScale ?? 1,
+                    ratio: e.imageRatio ?? 1,
                   )
                 : DanmakuContentPart.text(e.text ?? ""),
           )

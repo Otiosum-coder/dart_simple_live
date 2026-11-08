@@ -19,6 +19,7 @@ import 'package:simple_live_app/routes/app_navigation.dart';
 import 'package:simple_live_app/services/background_playback.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/follow_service.dart';
+import 'package:simple_live_app/utils/emoji_utils.dart';
 import 'package:simple_live_app/widgets/danmaku_input_bar.dart';
 import 'package:simple_live_app/widgets/desktop_refresh_button.dart';
 import 'package:simple_live_app/widgets/follow_user_item.dart';
@@ -333,20 +334,9 @@ class LiveRoomPage extends GetView<LiveRoomController> {
           // 自己实现
           wakelock: false,
         ),
-        // 拿不到播放地址时（未开播 / 大航海等付费限定房间）显示兜底封面，
-        // 否则这里只剩一片黑，用户只看到几行文字
-        Obx(
-          () => Visibility(
-            // 只在「取流流程结束且确实没地址」时显示，避免进房加载时闪一下
-            visible: controller.playUrlEmpty.value &&
-                controller.detail.value != null &&
-                !controller.loadError.value,
-            child: Image.asset(
-              'assets/images/cover_fallback.png',
-              fit: BoxFit.cover,
-            ),
-          ),
-        ),
+        // 拿不到播放地址时（未开播 / 大航海等付费限定房间）的兜底封面，
+        // 已经移到播放器控制层的最底层（player_controls.dart 的 buildNoPlaybackCover）：
+        // 放在这里会盖住并吃掉播放控制的点击。
         // 下播/断开后先盖一层不透明底：否则会同时看到「冻结的最后一帧」和未开播卡片
         Obx(
           () => Visibility(
@@ -459,7 +449,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
       label = "开播记录";
       bigText = "暂无";
       bigColor = const Color(0xFF6F767D);
-      subText = "该主播还没有可查询的直播记录";
+      subText = "该主播还没有开播记录";
     }
 
     const double cardWidth = 340;
@@ -533,13 +523,15 @@ class LiveRoomPage extends GetView<LiveRoomController> {
         padding: AppStyle.edgeInsetsA16,
         child: LayoutBuilder(
           builder: (context, constraints) {
-            // 双重约束自适应：
-            //   宽 ≤ 340，且不超过可用宽度的 82%；
-            //   高 ≤ 可用高度的 72%（小窗口 / 手机横屏会自动缩小）
-            var width = math.min(cardWidth, constraints.maxWidth * 0.82);
-            var height = math.min(width / 1.6, constraints.maxHeight * 0.72);
-            width = math.min(width, height * 1.6);
-            return SizedBox(width: width, height: height, child: card);
+            // 高度交给内容自己撑（文案不会再被固定高度裁掉），
+            // 宽度不超过 340 / 可用宽度的 92%；
+            // 实在放不下（小窗口、手机横屏）时整体等比缩小，而不是裁切。
+            var width = math.min(cardWidth, constraints.maxWidth * 0.92);
+            return FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.center,
+              child: SizedBox(width: width, child: card),
+            );
           },
         ),
       ),
@@ -876,27 +868,79 @@ class LiveRoomPage extends GetView<LiveRoomController> {
     if (spans == null || spans.isEmpty) {
       return [TextSpan(text: message.message, style: textStyle)];
     }
-    var emojiSize =
-        AppSettingsController.instance.chatTextSize.value * 1.45;
-    return spans.map<InlineSpan>((span) {
+    var textSize = AppSettingsController.instance.chatTextSize.value;
+    final result = <InlineSpan>[];
+    for (final span in spans) {
       if (span.isImage) {
-        // 大表情（B站 height=162）按倍数放大，普通表情保持和文字同高
-        final size = emojiSize * (span.imageScale ?? 1);
-        return WidgetSpan(
-          alignment: PlaceholderAlignment.middle,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 2),
-            child: NetImage(
-              span.imageUrl!.trim(),
-              width: size,
-              height: size,
-              fit: BoxFit.contain,
+        // span.imageScale 是「相对字号的最终倍数」，imageRatio 是素材原始宽高比。
+        // 只固定高度、宽度按比例推：B站表情素材多是宽扁的（如 2333），
+        // 塞进正方形盒子配合 BoxFit.contain 会被压窄。
+        final height = textSize * (span.imageScale ?? 1.45);
+        final width = height * (span.imageRatio ?? 1);
+        result.add(
+          WidgetSpan(
+            alignment: PlaceholderAlignment.middle,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: NetImage(
+                span.imageUrl!.trim(),
+                width: width,
+                height: height,
+                fit: BoxFit.contain,
+              ),
             ),
           ),
         );
+        continue;
       }
-      return TextSpan(text: span.text ?? "", style: textStyle);
-    }).toList();
+      // 文本里可能混着系统 emoji：它们不是图片，走字体渲染。
+      // 单独降一档字号，避免 emoji 字形撑满 em 框后比图片表情还大。
+      result.addAll(
+        splitEmojiTextSpans(span.text ?? "", textStyle, textSize),
+      );
+    }
+    return result;
+  }
+
+  /// 把一段文字按「系统 emoji / 普通文字」切开
+  ///
+  /// emoji 不是图片（没有 URL），只能靠码点识别；字号降到 0.9 倍，
+  /// 让三档比例变成：汉字 1.0 < emoji ≈1.0 < 图片表情 ≈1.1。
+  static List<InlineSpan> splitEmojiTextSpans(
+    String text,
+    TextStyle style,
+    double textSize,
+  ) {
+    if (text.isEmpty) {
+      return const [];
+    }
+    final emojiStyle = style.copyWith(fontSize: textSize * kEmojiFontScale);
+    final result = <InlineSpan>[];
+    final buffer = StringBuffer();
+    bool? bufferIsEmoji;
+    void flush() {
+      if (buffer.isEmpty) {
+        return;
+      }
+      result.add(
+        TextSpan(
+          text: buffer.toString(),
+          style: bufferIsEmoji == true ? emojiStyle : style,
+        ),
+      );
+      buffer.clear();
+    }
+
+    for (final rune in text.runes) {
+      final isEmoji = isEmojiCodePoint(rune);
+      if (bufferIsEmoji != null && bufferIsEmoji != isEmoji) {
+        flush();
+      }
+      bufferIsEmoji = isEmoji;
+      buffer.writeCharCode(rune);
+    }
+    flush();
+    return result;
   }
 
   Widget buildMessageItem(LiveMessage message) {

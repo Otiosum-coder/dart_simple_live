@@ -80,10 +80,21 @@ class LiveMessageSpan {
   /// 表情图相对普通表情的放大倍数（B站大表情 height 可达 162，普通表情约 48）
   final double? imageScale;
 
+  /// 表情图原始宽高比（宽 / 高）。
+  ///
+  /// B站表情素材不都是正方形（比如 2333 是宽扁的），渲染端只固定高度、
+  /// 宽度按这个比例算，才不会把图压窄。
+  final double? imageRatio;
+
   const LiveMessageSpan.text(this.text)
       : imageUrl = null,
-        imageScale = null;
-  const LiveMessageSpan.image(this.imageUrl, {this.imageScale}) : text = null;
+        imageScale = null,
+        imageRatio = null;
+  const LiveMessageSpan.image(
+    this.imageUrl, {
+    this.imageScale,
+    this.imageRatio,
+  }) : text = null;
 
   bool get isImage => imageUrl != null && imageUrl!.trim().isNotEmpty;
   bool get isText => text != null && text!.isNotEmpty;
@@ -92,6 +103,7 @@ class LiveMessageSpan {
         "text": text,
         "imageUrl": imageUrl,
         "imageScale": imageScale,
+        "imageRatio": imageRatio,
       };
 }
 

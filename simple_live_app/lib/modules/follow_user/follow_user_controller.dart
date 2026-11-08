@@ -3,6 +3,7 @@
 import 'dart:async';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
+import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/controller/base_controller.dart';
 import 'package:simple_live_app/app/event_bus.dart';
 import 'package:simple_live_app/app/log.dart';
@@ -105,14 +106,25 @@ class FollowUserController extends BasePageController<FollowUser> {
         liveCount: all.where((e) => e.liveStatus.value == 2).length,
       )
     ];
-    for (var entry in grouped.entries) {
-      var site = Sites.allSites[entry.key];
+    // 顺序跟设置里的「平台排序」一致；不在排序里的平台（以后新增的）排到最后
+    var siteOrder = AppSettingsController.instance.siteSort;
+    var keys = grouped.keys.toList()
+      ..sort((a, b) {
+        var ia = siteOrder.indexOf(a);
+        var ib = siteOrder.indexOf(b);
+        if (ia < 0) ia = siteOrder.length;
+        if (ib < 0) ib = siteOrder.length;
+        return ia.compareTo(ib);
+      });
+    for (var key in keys) {
+      var entry = grouped[key]!;
+      var site = Sites.allSites[key];
       list.add(FollowPlatformFilter(
-        siteId: entry.key,
-        name: site?.name ?? entry.key,
+        siteId: key,
+        name: site?.name ?? key,
         logo: site?.logo ?? "",
-        count: entry.value.length,
-        liveCount: entry.value.where((e) => e.liveStatus.value == 2).length,
+        count: entry.length,
+        liveCount: entry.where((e) => e.liveStatus.value == 2).length,
       ));
     }
     platformList.assignAll(list);

@@ -61,7 +61,8 @@ class BiliBiliDanmaku implements LiveDanmaku {
   ///
   /// 弹幕本身带的 URL 只是兜底来源之一，房间表情（含舰队/粉丝牌表情）
   /// 大多只在文本里给关键词，需要靠 GetEmoticons 拉到的这张表还原成图片。
-  Map<String, ({String url, double scale})> _roomEmojiMap = const {};
+  Map<String, ({String url, double scale, double ratio})> _roomEmojiMap =
+      const {};
 
 
   /// 直播间专属表情（emoticon_unique 前缀 room_）的图片地址，
@@ -132,7 +133,7 @@ class BiliBiliDanmaku implements LiveDanmaku {
         CoreLog.d("B站房间表情：接口返回 code=$code，跳过（未登录或无权限）");
         return;
       }
-      var map = <String, ({String url, double scale})>{};
+      var map = <String, ({String url, double scale, double ratio})>{};
       var roomUrls = <String>{};
       var packages = obj["data"]?["data"];
       if (packages is List) {
@@ -159,6 +160,7 @@ class BiliBiliDanmaku implements LiveDanmaku {
             map[token] = (
               url: imageUrl,
               scale: _emojiScaleFromSize(emot["width"], emot["height"]),
+              ratio: _emojiRatioFromSize(emot["width"], emot["height"]),
             );
             // 接口里「全站表情」和「房间专属表情」混在一起返回，
             // 只有 room_ 前缀的是本房间专属的
@@ -189,16 +191,38 @@ class BiliBiliDanmaku implements LiveDanmaku {
     return value;
   }
 
-  /// 表情图片相对普通表情的放大倍数
+  /// 表情图相对于「字号」的高度倍数（最终尺寸 = 字号 * 该倍数）
   ///
-  /// B站普通表情约 48px 高，房间/大表情 100~162px；聊天区一行文字才十几 px，
-  /// 按真实像素还原会顶出两行多，所以压成「约 2 行文字高」比较接近官方观感。
+  /// 这个倍数直接就是显示倍数，调用方不再额外乘基准值，避免两处基准互相放大。
+  /// 倍数相对「字号」而言，画出来之后再乘具体表情的倍数。
+  /// B站表情素材四周有留白（画面只占整图约 7 成），所以盒子要略大于字高：
+  /// 标准表情按 1.6 倍字号画，可见画面约 1.1 倍字高，和系统 emoji 基本齐平。
   double _emojiScaleFromSize(dynamic width, dynamic height) {
     final h = double.tryParse(height?.toString() ?? "") ?? 0;
     if (h <= 0) {
+      return 1.45;
+    }
+    // 标准表情（≤64px）：盒高 1.45 倍字号。
+    // 注意：素材留白多少因表情而异，留白少的（小黄脸这类）会顶满盒子，
+    // 所以盒子倍数要留点余量，不能按「可见画面」去算。
+    if (h <= 64) {
+      return 1.45;
+    }
+    // 大表情：162px → 约 2.0 倍字号，封顶 2.1
+    return ((h / 80) * 1.0).clamp(1.2, 2.1);
+  }
+
+  /// 表情图原始宽高比（宽 / 高），拿不到时按正方形处理
+  ///
+  /// B站表情素材尺寸不一（2333 这类是宽扁的），渲染时宽度要按真实比例算，
+  /// 否则塞进正方形盒子会被压窄。
+  double _emojiRatioFromSize(dynamic width, dynamic height) {
+    final w = double.tryParse(width?.toString() ?? "") ?? 0;
+    final h = double.tryParse(height?.toString() ?? "") ?? 0;
+    if (w <= 0 || h <= 0) {
       return 1;
     }
-    return (h / 80).clamp(1.0, 2.2);
+    return (w / h).clamp(0.3, 3.0);
   }
 
   /// 统一成 "[关键词]" 形态（接口里的 emoji 有时带方括号、有时不带）
@@ -416,19 +440,24 @@ class BiliBiliDanmaku implements LiveDanmaku {
   /// B站有两种形态：
   /// 1) 纯表情弹幕：整条消息就是一个表情 key，URL 在 info[0][13]["url"]
   /// 2) 文字混排：info[0][15]["extra"] 里带 emots 表，key 会出现在消息里
-  Map<String, ({String url, double scale})> _extractEmojiMap(
+  Map<String, ({String url, double scale, double ratio})> _extractEmojiMap(
     dynamic info,
     String message,
   ) {
-    final emojiMap = <String, ({String url, double scale})>{};
+    final emojiMap = <String, ({String url, double scale, double ratio})>{};
 
-    void addEmoji(String key, dynamic url, {double scale = 1}) {
+    void addEmoji(
+      String key,
+      dynamic url, {
+      double scale = 1,
+      double ratio = 1,
+    }) {
       final emojiKey = key.trim();
       final value = _normalizeEmojiUrl(url);
       if (emojiKey.isEmpty || value.isEmpty) {
         return;
       }
-      emojiMap[emojiKey] = (url: value, scale: scale);
+      emojiMap[emojiKey] = (url: value, scale: scale, ratio: ratio);
     }
 
     final trimmed = message.trim();
@@ -459,6 +488,7 @@ class BiliBiliDanmaku implements LiveDanmaku {
             trimmed,
             emot["url"],
             scale: _emojiScaleFromSize(emot["width"], emot["height"]),
+            ratio: _emojiRatioFromSize(emot["width"], emot["height"]),
           );
         }
       }
@@ -486,6 +516,7 @@ class BiliBiliDanmaku implements LiveDanmaku {
                   key,
                   emot["url"],
                   scale: _emojiScaleFromSize(emot["width"], emot["height"]),
+                  ratio: _emojiRatioFromSize(emot["width"], emot["height"]),
                 );
               }
             }
@@ -499,10 +530,21 @@ class BiliBiliDanmaku implements LiveDanmaku {
 
   /// 判断这条弹幕是不是「整条都是直播间专属图片表情」
   ///
-  /// 依据两条，任一命中即可：
-  /// 1. 纯表情弹幕的 info[0][13].emoticon_unique 以 room_ 开头（最可靠，不依赖表情表是否拉到）；
-  /// 2. 片段全是图片，且每个图片地址都命中本房间的 room_ 表情（表拉取成功时的兜底）。
-  bool _isRoomEmojiDanmaku(dynamic info, List<LiveMessageSpan> spans) {
+  /// 任一命中即可：
+  /// 1. [roomEmojiOnly]：解析片段时确认「除了方括号/空白，所有内容都是房间表情表里的 key」
+  ///    （最可靠，不依赖 info 里有没有 emoticon_unique）；
+  /// 2. 纯表情弹幕的 info[0][13].emoticon_unique 以 room_ 开头；
+  /// 3. info[0][15].extra.emots 里带 emotion_unique 以 room_ 开头的那一个 key
+  ///    （表情弹幕常见形态：表情信息挂在这里，info[0][13] 是空的）；
+  /// 4. 片段全是图片，且每个图片地址都命中本房间的 room_ 表情（表拉取成功时的兜底）。
+  bool _isRoomEmojiDanmaku(
+    dynamic info,
+    List<LiveMessageSpan> spans,
+    bool roomEmojiOnly,
+  ) {
+    if (roomEmojiOnly) {
+      return true;
+    }
     try {
       final info0 = (info is List && info.isNotEmpty) ? info[0] : null;
       final emojiInfo =
@@ -511,6 +553,27 @@ class BiliBiliDanmaku implements LiveDanmaku {
         final unique = emojiInfo["emoticon_unique"]?.toString() ?? "";
         if (unique.startsWith("room_")) {
           return true;
+        }
+      }
+    } catch (_) {}
+    // 表情信息挂在 info[0][15].extra.emots 里的形态
+    try {
+      final info0 = (info is List && info.isNotEmpty) ? info[0] : null;
+      final extraMap = (info0 is List && info0.length > 15) ? info0[15] : null;
+      if (extraMap is Map) {
+        final extra = extraMap["extra"];
+        if (extra is String && extra.isNotEmpty) {
+          final emots = (json.decode(extra) as Map?)?["emots"];
+          if (emots is Map) {
+            for (final value in emots.values) {
+              if (value is Map) {
+                final unique = value["emoticon_unique"]?.toString() ?? "";
+                if (unique.startsWith("room_")) {
+                  return true;
+                }
+              }
+            }
+          }
         }
       }
     } catch (_) {}
@@ -523,11 +586,29 @@ class BiliBiliDanmaku implements LiveDanmaku {
   }
 
   /// 按「表情 key 长的优先」把消息切成 文字/图片 片段
-  List<LiveMessageSpan> _extractSpans(dynamic info, String message) {
+  ///
+  /// [roomEmojiOnly]：整条消息除了方括号/空白，其余全部是本房间专属表情表里的 key。
+  /// 房间表情弹幕的文本形态不固定（有的带方括号、有的不带），
+  /// info[0][13] 也经常是空的，所以用「片段来源」来兜底识别。
+  ({List<LiveMessageSpan> spans, bool roomEmojiOnly}) _extractSpans(
+    dynamic info,
+    String message,
+  ) {
     final emojiMap = _extractEmojiMap(info, message);
     if (emojiMap.isEmpty) {
-      return const [];
+      return (spans: const <LiveMessageSpan>[], roomEmojiOnly: false);
     }
+    // 房间专属表情的 key（带方括号和不带方括号两种形态都收）
+    final roomKeys = <String>{};
+    for (final entry in _roomEmojiMap.entries) {
+      roomKeys.add(entry.key);
+      final raw = entry.key.replaceAll("[", "").replaceAll("]", "").trim();
+      if (raw.isNotEmpty) {
+        roomKeys.add(raw);
+      }
+    }
+    var onlyRoomEmoji = true;
+    var hasRoomEmoji = false;
     final spans = <LiveMessageSpan>[];
     final keys = emojiMap.keys.toList()
       ..sort((a, b) => b.length.compareTo(a.length));
@@ -545,22 +626,39 @@ class BiliBiliDanmaku implements LiveDanmaku {
       }
       if (matchedKey == null) {
         final nextIndex = _nextEmojiIndex(message, keys, index + 1);
-        spans.add(LiveMessageSpan.text(message.substring(index, nextIndex)));
+        final text = message.substring(index, nextIndex);
+        // 方括号和空白只是表情 key 的包装，不算「有文字内容」
+        final content = text
+            .replaceAll("[", "")
+            .replaceAll("]", "")
+            .replaceAll("【", "")
+            .replaceAll("】", "")
+            .trim();
+        if (content.isNotEmpty) {
+          onlyRoomEmoji = false;
+        }
+        spans.add(LiveMessageSpan.text(text));
         index = nextIndex;
         continue;
+      }
+      if (roomKeys.contains(matchedKey)) {
+        hasRoomEmoji = true;
+      } else {
+        onlyRoomEmoji = false;
       }
       final emoji = emojiMap[matchedKey];
       if (emoji != null && emoji.url.isNotEmpty) {
         spans.add(
           LiveMessageSpan.image(
             emoji.url,
-            imageScale: emoji.scale == 1 ? null : emoji.scale,
+            imageScale: emoji.scale,
+            imageRatio: emoji.ratio,
           ),
         );
       }
       index += matchedKey.length;
     }
-    return spans;
+    return (spans: spans, roomEmojiOnly: onlyRoomEmoji && hasRoomEmoji);
   }
 
   int _nextEmojiIndex(String message, List<String> keys, int start) {
@@ -590,13 +688,18 @@ class BiliBiliDanmaku implements LiveDanmaku {
             // info[2][0] = 发送者 uid，用来标记「自己发的弹幕」
             var senderUid = asT<int?>(obj["info"][2][0]) ?? 0;
             // 表情弹幕：把表情图片插回原文位置（纯表情 / 文字混排都走这里）
-            final spans = _extractSpans(obj["info"], message);
+            final extracted = _extractSpans(obj["info"], message);
+            final spans = extracted.spans;
             final imageUrls = spans
                 .where((span) => span.isImage)
                 .map((span) => span.imageUrl!.trim())
                 .toList();
             var liveMsg = LiveMessage(
-              isRoomEmoji: _isRoomEmojiDanmaku(obj["info"], spans),
+              isRoomEmoji: _isRoomEmojiDanmaku(
+                obj["info"],
+                spans,
+                extracted.roomEmojiOnly,
+              ),
               type: LiveMessageType.chat,
               userName: username,
               message: message,
