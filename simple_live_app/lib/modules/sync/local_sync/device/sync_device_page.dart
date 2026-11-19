@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 import 'package:remixicon/remixicon.dart';
 import 'package:simple_live_app/app/app_style.dart';
 import 'package:simple_live_app/modules/sync/local_sync/device/sync_device_controller.dart';
+import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/widgets/settings/settings_card.dart';
 
@@ -63,10 +64,17 @@ class SyncDevicePage extends GetView<SyncDeviceController> {
                 AppStyle.divider,
                 ListTile(
                   leading: const Icon(Remix.account_circle_line),
-                  title: const Text("同步哔哩哔哩账号"),
+                  title: const Text("同步账号"),
+                  subtitle: const Text("哔哩哔哩 / 斗鱼 / 虎牙 / 抖音"),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () {
-                    controller.syncBiliAccount();
+                    Get.toNamed(
+                      RoutePath.kSyncAccount,
+                      arguments: {
+                        "client": controller.client,
+                        "info": controller.info,
+                      },
+                    );
                   },
                 ),
               ],

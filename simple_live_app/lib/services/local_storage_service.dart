@@ -144,6 +144,9 @@ class LocalStorageService extends GetxService {
   /// 抖音登录cookie（含 sessionid，与「自定义 ttwid」分开存）
   static const String kDouyinLoginCookie = "DouyinLoginCookie";
 
+  /// 抖音登录cookie 的备份（退出登录后仍可复制到别的设备用）
+  static const String kDouyinLoginCookieBackup = "DouyinLoginCookieBackup";
+
 
   ///主题色
   static const String kStyleColor = "kStyleColor";

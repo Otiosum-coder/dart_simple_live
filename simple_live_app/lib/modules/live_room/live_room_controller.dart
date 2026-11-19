@@ -16,6 +16,7 @@ import 'package:simple_live_app/app/event_bus.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
+import 'package:simple_live_app/utils/danmaku_limit.dart';
 import 'package:simple_live_app/services/background_playback.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyu_account_service.dart';
@@ -51,6 +52,18 @@ class OverlaySuperChat {
   double get progress =>
       (remainSeconds / LiveRoomController.overlaySuperChatSeconds)
           .clamp(0.0, 1.0);
+}
+
+/// 一条已发出、等待「服务端回推 或 本地补发」的弹幕记录。
+///
+/// 用 token 追踪是否已上屏，替代旧的全局 _lastSentText/_lastSentEchoed 文字比较，
+/// 这样即使别人发了相同文字也不会把「自己这条」的补发吞掉。
+class _PendingSend {
+  _PendingSend(this.text);
+  final String text;
+
+  /// 已经上屏（服务端回推 或 本地补发过一次）
+  bool shown = false;
 }
 
 class LiveRoomController extends PlayerController with WidgetsBindingObserver {
@@ -261,10 +274,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     liveDanmaku.onReady = onWSReady;
   }
 
-  /// 最近一次发送的弹幕（用于避免本地回显与真实推送重复）
-  String _lastSentText = "";
-  DateTime? _lastSentAt;
-  bool _lastSentEchoed = false;
+  /// 每次发送生成一条 pending 记录，按 token 追踪「是否已上屏」。
+  /// 旧实现用全局 _lastSentText/_lastSentEchoed 做文字比较，会被别人同文误伤。
+  int _sendTokenSeq = 0;
+  final Map<int, _PendingSend> _pendingSends = {};
 
   /// 接收到WebSocket信息
   void onWSMessage(LiveMessage msg) {
@@ -275,12 +288,19 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         Log.d("屏蔽图片表情弹幕：${msg.message}");
         return;
       }
-      var sentAt = _lastSentAt;
-      if (_lastSentText.isNotEmpty &&
-          msg.message == _lastSentText &&
-          sentAt != null &&
-          DateTime.now().difference(sentAt).inSeconds <= 5) {
-        _lastSentEchoed = true;
+      // 只有「服务端把我自己发的这条推回来」才算已上屏；别人发相同文字绝不影响。
+      if (msg.isSelf) {
+        for (final p in _pendingSends.values) {
+          if (p.text == msg.message) {
+            if (p.shown) {
+              // 已经上屏过（本地补发或前一次回推），迟到的重复回推直接丢掉，避免重复
+              Log.i("忽略重复的自己弹幕回推：${msg.message}");
+              return;
+            }
+            p.shown = true;
+            break;
+          }
+        }
       }
       if (messages.length > 200 && !disableAutoScroll.value) {
         messages.removeAt(0);
@@ -307,6 +327,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       }
 
       messages.add(msg);
+      Log.i("聊天列表+消息[isSelf=${msg.isSelf}] ${msg.userName}: ${msg.message}");
 
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => chatScrollToBottom(),
@@ -347,6 +368,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     } else if (msg.type == LiveMessageType.online) {
       online.value = msg.data;
     } else if (msg.type == LiveMessageType.superChat) {
+      // 同一条付费留言可能被重复推送（进房全量 + 增量），按平台 id 去重
+      final id = msg.data.id;
+      if (id.isNotEmpty && superChats.any((e) => e.id == id)) {
+        return;
+      }
       superChats.add(msg.data);
       addOverlaySuperChat(msg.data);
     }
@@ -354,6 +380,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   /// 全屏下的弹幕输入条是否显示（按回车或点控制条按钮唤起）
   var showDanmakuInput = false.obs;
+
+  /// 进入/退出全屏（含系统 F11/ESC）时收起全屏输入框，避免输入框残留/焦点错乱
+  @override
+  void onFullScreenStateReset() {
+    showDanmakuInput.value = false;
+  }
 
   /// 正在输入弹幕（打字时控制条不要自动隐藏）
   bool danmakuTyping = false;
@@ -490,6 +522,13 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (message.isEmpty) {
       return "弹幕内容不能为空";
     }
+    // 兜底：超出平台字数上限就截断后发送，而不是整条被服务端拒绝
+    var limit = danmakuMaxLength(site.id);
+    var truncated = truncateDanmaku(message, limit);
+    if (truncated != message) {
+      Log.i("发送弹幕：超出上限（$limit 字），已截断为：$truncated");
+      message = truncated;
+    }
     if (!AppSettingsController.instance.playerSendDanmaku.value) {
       return "请先在「设置 - 播放设置」里打开「允许发送弹幕」";
     }
@@ -504,20 +543,20 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (last != null && DateTime.now().difference(last).inSeconds < 2) {
       return "发送太快了，请稍后再试";
     }
-    // 并发上限 2 条，再多就静默忽略（不提示、不回显，等同丢弃）
+    // 并发上限 2 条，再多就明确提示（绝不静默丢弃还当成功）
     if (_sendingCount >= 2) {
-      Log.i("发送弹幕：已有 2 条在发送中，本次静默忽略");
-      return null;
+      Log.i("发送弹幕：已有 2 条在发送中，本次拒绝");
+      return "发送太频繁，请稍候再试";
     }
     var tokenTip = await _refreshDouyuTokenIfNeeded();
     if (tokenTip != null) {
       return tokenTip;
     }
     Log.i("发送弹幕[${site.id}]：$message");
-    // 先记录，供 onWSMessage 判断“这条是我刚发的”（广播可能比回执先到）
-    _lastSentText = message;
-    _lastSentAt = DateTime.now();
-    _lastSentEchoed = false;
+    // 先建 pending 记录（广播可能比回执先到，靠它判断“这条是否已上屏”）
+    final pending = _PendingSend(message);
+    final token = ++_sendTokenSeq;
+    _pendingSends[token] = pending;
     _sendingCount++;
     String? error;
     try {
@@ -554,29 +593,43 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         Log.i("发送结果不确定（$error），按成功静默处理");
         error = null;
       }
+    } catch (e) {
+      Log.i("发送弹幕[token=$token]异常：$e");
+      error = "发送失败：$e";
     } finally {
       _sendingCount--;
     }
     if (error == null) {
       _lastSendTime = DateTime.now();
-      // 本地回显：等 1.5 秒，如果服务端没有把这条推回来，再自己补一条
-      // （避免和真实推送重复）
-      Future.delayed(const Duration(milliseconds: 1500), () {
-        if (_lastSentEchoed || _lastSentText != message) {
+      // 本地补发：1.2 秒内若没等到服务端把我这条推回来，就自己补一条上屏。
+      // 按 token 判断、每条最多补一次，绝不受别人同文影响。
+      Future.delayed(const Duration(milliseconds: 1200), () {
+        if (!_pendingSends.containsKey(token)) {
           return;
         }
-        Log.i("发送成功，本地回显：$message");
-        onWSMessage(
-          LiveMessage(
-            type: LiveMessageType.chat,
-            userName: _selfName(),
-            message: message,
-            color: LiveMessageColor.white,
-            // 本地回显也要标成“自己发的”，否则滚动弹幕没有描边样式
-            isSelf: true,
-          ),
-        );
+        if (!pending.shown) {
+          Log.i("弹幕发送[token=$token] 服务端未回推，本地补发：$message");
+          onWSMessage(
+            LiveMessage(
+              type: LiveMessageType.chat,
+              userName: _selfName(),
+              message: message,
+              color: LiveMessageColor.white,
+              // 本地回显也要标成“自己发的”，否则滚动弹幕没有描边样式
+              isSelf: true,
+            ),
+          );
+          // onWSMessage 命中 pending 后会置 shown，这里兜底再置一次
+          pending.shown = true;
+        }
+        // 再保留一段时间用于压掉迟到的服务端回推，然后回收
+        Future.delayed(const Duration(seconds: 8), () {
+          _pendingSends.remove(token);
+        });
       });
+    } else {
+      // 发送失败：立即回收 pending，避免影响后续
+      _pendingSends.remove(token);
     }
     return error;
   }
@@ -838,7 +891,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   void changePlayLine(int index, {bool fromUser = false}) {
     // 模式跟着线路走：选音频线路 → 开「只播放声音」；选视频线路 → 关
     if (fromUser && audioLineIndex != null) {
-      AppSettingsController.instance.setPlayerAudioOnly(index == audioLineIndex);
+      AppSettingsController.instance
+          .setPlayerAudioOnly(index == audioLineIndex);
     }
     currentLineIndex = index;
     //重置错误次数
@@ -1098,8 +1152,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         if (remain > 0) {
           addOverlaySuperChat(
             item,
-            maxSeconds:
-                remain < overlaySuperChatSeconds ? remain : overlaySuperChatSeconds,
+            maxSeconds: remain < overlaySuperChatSeconds
+                ? remain
+                : overlaySuperChatSeconds,
           );
         }
       }
@@ -1110,6 +1165,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   /// 移除掉已到期的SC
+  ///
+  /// 斗鱼付费留言（高能弹幕）自带展示时长（`cet`/`etimeV2` → endTime），
+  /// 到期就和 B 站 SC 一样从列表移除，不再额外保留固定 60 秒。
   void removeSuperChats() async {
     var now = DateTime.now().millisecondsSinceEpoch;
     superChats.value = superChats
@@ -1214,7 +1272,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         children: [
           DanmuSettingsView(
             danmakuController: danmakuController,
-            showRoomEmojiBlock: site.id == Constant.kBiliBili,
+            // 哔哩哔哩、斗鱼、虎牙都有图片表情弹幕，都需要这个开关
+            showRoomEmojiBlock: site.id == Constant.kBiliBili ||
+                site.id == Constant.kDouyu ||
+                site.id == Constant.kHuya,
             onTapDanmuShield: () {
               Get.back();
               showDanmuShield();
@@ -1587,6 +1648,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     // 清除全部消息
     liveDanmaku.stop();
     messages.clear();
+    _pendingSends.clear();
     superChats.clear();
     clearOverlaySuperChats();
     danmakuController?.clear();

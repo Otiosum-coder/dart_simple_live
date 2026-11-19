@@ -1,12 +1,11 @@
-
 import 'package:characters/characters.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
-import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
+import 'package:simple_live_app/utils/danmaku_limit.dart';
 
 /// 弹幕输入条（胶囊样式：左侧输入 + 右侧橙色「发送(Enter)」按钮）
 ///
@@ -49,20 +48,7 @@ class _DanmakuInputBarState extends State<DanmakuInputBar> {
   bool _sending = false;
 
   /// 平台弹幕字数上限（按字符计，emoji 算 1 个）
-  int get _maxLength {
-    switch (widget.controller.site.id) {
-      case Constant.kDouyu:
-        return 30;
-      case Constant.kBiliBili:
-        return 20;
-      case Constant.kHuya:
-        return 30;
-      case Constant.kDouyin:
-        return 50;
-      default:
-        return 30;
-    }
-  }
+  int get _maxLength => danmakuMaxLength(widget.controller.site.id);
 
   int get _charCount => _textController.text.characters.length;
 
@@ -97,6 +83,8 @@ class _DanmakuInputBarState extends State<DanmakuInputBar> {
     _textController.removeListener(_onTextChanged);
     _textController.dispose();
     _focusNode.dispose();
+    // 复位全局打字态，避免全屏输入框销毁后控制条一直不自动隐藏
+    DanmakuInputBar.typing = false;
     super.dispose();
   }
 
@@ -169,7 +157,8 @@ class _DanmakuInputBarState extends State<DanmakuInputBar> {
               textInputAction: TextInputAction.send,
               onSubmitted: (_) => _send(),
               maxLength: _maxLength,
-              maxLengthEnforcement: MaxLengthEnforcement.truncateAfterCompositionEnds,
+              maxLengthEnforcement:
+                  MaxLengthEnforcement.truncateAfterCompositionEnds,
               cursorColor: cursorColor,
               style: TextStyle(
                 fontSize: 13.5,
@@ -249,58 +238,58 @@ class _DanmakuInputBarState extends State<DanmakuInputBar> {
           child: SizedBox(
             width: double.infinity,
             child: Container(
-          height: 36,
-          padding: const EdgeInsets.only(left: 14, right: 10),
-          decoration: BoxDecoration(
-            color: const Color(0xFF2C2C2E),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.white24),
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _textController,
-                  focusNode: _focusNode,
-                  enabled: supported,
-                  textInputAction: TextInputAction.send,
-                  onSubmitted: (_) => _send(),
-                  maxLength: _maxLength,
-                  maxLengthEnforcement:
-                      MaxLengthEnforcement.truncateAfterCompositionEnds,
-                  cursorColor: Colors.white,
-                  style: const TextStyle(fontSize: 13, color: Colors.white),
-                  decoration: InputDecoration(
-                    isDense: true,
-                    counterText: "",
-                    border: InputBorder.none,
-                    hintText: supported ? "说点什么吧~" : "该平台暂不支持发送",
-                    hintStyle: const TextStyle(
-                      fontSize: 13,
-                      color: Color(0xFF9AA0A6),
-                    ),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                ),
+              height: 36,
+              padding: const EdgeInsets.only(left: 14, right: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2C2C2E),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.white24),
               ),
-              if (_charCount > 0)
-                Padding(
-                  padding: const EdgeInsets.only(left: 6),
-                  child: Text(
-                    "$_charCount/$_maxLength",
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: _maxLength - _charCount <= 0
-                          ? Colors.redAccent
-                          : (_maxLength - _charCount <= 5
-                              ? Colors.orangeAccent
-                              : Colors.white38),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _textController,
+                      focusNode: _focusNode,
+                      enabled: supported,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) => _send(),
+                      maxLength: _maxLength,
+                      maxLengthEnforcement:
+                          MaxLengthEnforcement.truncateAfterCompositionEnds,
+                      cursorColor: Colors.white,
+                      style: const TextStyle(fontSize: 13, color: Colors.white),
+                      decoration: InputDecoration(
+                        isDense: true,
+                        counterText: "",
+                        border: InputBorder.none,
+                        hintText: supported ? "说点什么吧~" : "该平台暂不支持发送",
+                        hintStyle: const TextStyle(
+                          fontSize: 13,
+                          color: Color(0xFF9AA0A6),
+                        ),
+                        contentPadding: EdgeInsets.zero,
+                      ),
                     ),
                   ),
-                ),
-            ],
-          ),
-        ),
+                  if (_charCount > 0)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 6),
+                      child: Text(
+                        "$_charCount/$_maxLength",
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: _maxLength - _charCount <= 0
+                              ? Colors.redAccent
+                              : (_maxLength - _charCount <= 5
+                                  ? Colors.orangeAccent
+                                  : Colors.white38),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ),
         ),
       );

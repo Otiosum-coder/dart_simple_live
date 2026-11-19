@@ -186,9 +186,12 @@ class Utils {
     required String title,
     required Widget child,
     double maxWidth = 600,
+    // 传 0~1 之间则是按屏高比例显示的半屏弹层（例如 0.5 = 半屏）
+    double? heightFactor,
   }) async {
     var result = await showModalBottomSheet(
       context: Get.context!,
+      isScrollControlled: heightFactor != null,
       constraints: BoxConstraints(
         maxWidth: maxWidth,
       ),
@@ -198,23 +201,42 @@ class Utils {
           topRight: Radius.circular(12),
         ),
       ),
-      builder: (_) => Column(
-        children: [
-          ListTile(
-            contentPadding: const EdgeInsets.only(
-              left: 12,
-            ),
-            title: Text(title),
-            trailing: IconButton(
-              onPressed: Get.back,
-              icon: const Icon(Remix.close_line),
-            ),
+      builder: (_) {
+        var header = ListTile(
+          contentPadding: const EdgeInsets.only(
+            left: 12,
           ),
-          Expanded(
-            child: child,
+          title: Text(title),
+          trailing: IconButton(
+            onPressed: Get.back,
+            icon: const Icon(Remix.close_line),
           ),
-        ],
-      ),
+        );
+        // 指定了高度比例：半屏弹层，内容区可滚动但整体固定为该比例屏高
+        if (heightFactor != null) {
+          return FractionallySizedBox(
+            heightFactor: heightFactor,
+            child: SafeArea(
+              top: false,
+              child: Column(
+                children: [
+                  header,
+                  Expanded(child: child),
+                ],
+              ),
+            ),
+          );
+        }
+        // 默认：跟随内容自适应、最高 9/16 屏（保持原行为）
+        return Column(
+          children: [
+            header,
+            Expanded(
+              child: child,
+            ),
+          ],
+        );
+      },
     );
     return result;
   }
@@ -526,7 +548,9 @@ class Utils {
         return Color.fromARGB(255, (v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
       }
       if (text.length == 6) {
-        return Color.fromARGB(255, int.parse(text.substring(0, 2), radix: 16),
+        return Color.fromARGB(
+            255,
+            int.parse(text.substring(0, 2), radix: 16),
             int.parse(text.substring(2, 4), radix: 16),
             int.parse(text.substring(4, 6), radix: 16));
       }

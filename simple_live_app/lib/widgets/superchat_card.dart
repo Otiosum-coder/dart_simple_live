@@ -26,6 +26,9 @@ class _SuperChatCardState extends State<SuperChatCard> {
 
   int countdown = 0;
 
+  /// 倒计时结束（斗鱼的付费留言会保留在列表里，只把倒计时换成「已结束」）
+  bool expired = false;
+
   @override
   void initState() {
     var currentTime = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -35,6 +38,7 @@ class _SuperChatCardState extends State<SuperChatCard> {
     countdown = endTime - currentTime;
     if (countdown <= 0) {
       countdown = 0;
+      expired = true;
       // 首帧就请求移除，避免先渲染出 -2 这种数字
       WidgetsBinding.instance.addPostFrameCallback((_) {
         widget.onExpire?.call();
@@ -55,6 +59,9 @@ class _SuperChatCardState extends State<SuperChatCard> {
 
     setState(() {
       countdown -= 1;
+      if (countdown <= 0) {
+        expired = true;
+      }
     });
   }
 
@@ -95,7 +102,9 @@ class _SuperChatCardState extends State<SuperChatCard> {
                           ),
                         ),
                         Text(
-                          "￥${widget.message.price}",
+                          widget.message.price > 0
+                              ? "￥${widget.message.price}"
+                              : "免费",
                           style: const TextStyle(
                             fontSize: 12,
                             color: Colors.grey,
@@ -105,7 +114,7 @@ class _SuperChatCardState extends State<SuperChatCard> {
                     ),
                   ),
                   Text(
-                    "$displayCountdown",
+                    expired ? "已结束" : "$displayCountdown",
                     style: const TextStyle(
                       fontSize: 14,
                       color: Colors.grey,

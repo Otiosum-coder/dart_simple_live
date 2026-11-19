@@ -25,6 +25,13 @@ class DouyinAccountService extends GetxService {
   /// 登录后的完整 Cookie（含 sessionid）
   var loginCookie = "";
 
+  /// 上一次登录拿到的 Cookie 备份
+  ///
+  /// 抖音的登录状态是「一份会话」：本机点退出登录后，如果还想把登录态搬到
+  /// 另一台设备，就没有 Cookie 可复制了。所以每次拿到新 Cookie 都留一份备份，
+  /// 退出登录不清它，随时可以复制。
+  var loginCookieBackup = "";
+
   var hasCookie = false.obs;
   var logined = false.obs;
   var name = "未登录".obs;
@@ -35,6 +42,8 @@ class DouyinAccountService extends GetxService {
         .getValue(LocalStorageService.kDouyinCookie, "");
     loginCookie = LocalStorageService.instance
         .getValue(LocalStorageService.kDouyinLoginCookie, "");
+    loginCookieBackup = LocalStorageService.instance
+        .getValue(LocalStorageService.kDouyinLoginCookieBackup, "");
     hasCookie.value = cookie.isNotEmpty;
     parseLoginCookie();
     setSite();
@@ -146,11 +155,22 @@ class DouyinAccountService extends GetxService {
     setSite();
   }
 
+  /// 可以拿去复制的 Cookie：优先当前登录态，退出登录后回落到备份
+  String get copyableCookie =>
+      loginCookie.isNotEmpty ? loginCookie : loginCookieBackup;
+
+  /// 当前这份可复制的 Cookie 是否只是备份（当前已退出登录）
+  bool get copyableIsBackup =>
+      loginCookie.isEmpty && loginCookieBackup.isNotEmpty;
+
   /// 保存「登录 Cookie」（扫码 / Web 登录成功后调用）
   void setLoginCookie(String rawCookie) {
     loginCookie = rawCookie.trim();
+    loginCookieBackup = loginCookie;
     LocalStorageService.instance
         .setValue(LocalStorageService.kDouyinLoginCookie, loginCookie);
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kDouyinLoginCookieBackup, loginCookieBackup);
     parseLoginCookie();
     setSite();
     if (logined.value) {

@@ -15,6 +15,8 @@ import 'package:simple_live_app/modules/sync/remote_sync/room/remote_sync_room_c
 import 'package:simple_live_app/modules/sync/remote_sync/room/remote_sync_room_page.dart';
 import 'package:simple_live_app/modules/search/search_controller.dart';
 import 'package:simple_live_app/modules/search/search_page.dart';
+import 'package:simple_live_app/modules/sync/local_sync/device/account/sync_account_controller.dart';
+import 'package:simple_live_app/modules/sync/local_sync/device/account/sync_account_page.dart';
 import 'package:simple_live_app/modules/sync/local_sync/device/sync_device_controller.dart';
 import 'package:simple_live_app/modules/sync/local_sync/device/sync_device_page.dart';
 import 'package:simple_live_app/modules/sync/local_sync/scan_qr/sync_scan_qr_controller.dart';
@@ -202,6 +204,7 @@ class AppPages {
         BindingsBuilder.put(() => HuyaQRLoginController()),
       ],
     ),
+
     // 数据同步
     GetPage(
       name: RoutePath.kSync,
@@ -234,6 +237,19 @@ class AppPages {
       bindings: [
         BindingsBuilder.put(
           () => SyncDeviceController(
+            client: Get.arguments['client'],
+            info: Get.arguments['info'],
+          ),
+        ),
+      ],
+    ),
+    //同步账号
+    GetPage(
+      name: RoutePath.kSyncAccount,
+      page: () => const SyncAccountPage(),
+      bindings: [
+        BindingsBuilder.put(
+          () => SyncAccountController(
             client: Get.arguments['client'],
             info: Get.arguments['info'],
           ),

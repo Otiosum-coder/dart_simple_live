@@ -8,6 +8,7 @@ import 'package:simple_live_core/src/common/http_client.dart' as core_http;
 import 'package:simple_live_core/src/common/web_socket_util.dart';
 
 import '../common/binary_writer.dart';
+import 'douyu_emoticon.dart';
 
 class DouyuDanmakuArgs {
   /// 房间号
@@ -166,13 +167,22 @@ class DouyuDanmaku implements LiveDanmaku {
   DouyuDanmakuArgs danmakuArgs = DouyuDanmakuArgs(roomId: "");
   Completer<void>? _loginCompleter;
 
+  /// 当前房间的表情表（表情名 -> 图片地址），用于把 [表情名] 渲染成图片
+  Map<String, String> _emoticons = const {};
+
   @override
   Future start(dynamic args) async {
+    // 重新 start（换房 / 刷新 / 重连）要复位，否则预热会被 stop() 的标记挡住
+    _stopped = false;
     danmakuArgs = args is DouyuDanmakuArgs
         ? args
         : DouyuDanmakuArgs(roomId: args.toString());
     CoreLog.i("斗鱼弹幕：发送能力 canSend=${danmakuArgs.canSend} "
         "${danmakuArgs.sendReadyDesc} 缺字段=${danmakuArgs.missingSendFields}");
+    // 表情表是异步拉的，不能阻塞弹幕连接；拉到之前弹幕先按纯文本显示
+    unawaited(_loadEmoticons(danmakuArgs.roomId));
+    // 进房就把发送连接预热好：等你点发送时不用再建连+登录（那一段容易卡 4 秒）
+    unawaited(_preheatSender());
     // 重连/刷新时会再次调用 start()：必须先关闭旧连接，
     // 否则旧 socket 仍在接收消息 → 聊天列表和滚动弹幕都会重复出现
     webScoketUtils?.close();
@@ -197,6 +207,23 @@ class DouyuDanmaku implements LiveDanmaku {
       },
     );
     webScoketUtils?.connect();
+  }
+
+  /// 拉取房间表情表（钻粉专属表情 / 房间表情）
+  ///
+  /// 斗鱼弹幕正文里的 [表情名] 需要靠这张表换成图片；拉取失败就退化成纯文本。
+  Future<void> _loadEmoticons(String roomId) async {
+    if (roomId.isEmpty) {
+      return;
+    }
+    try {
+      final items = await DouyuEmoticon.load(roomId, cookie: danmakuArgs.cookie);
+      if (items.isNotEmpty) {
+        _emoticons = items;
+      }
+    } catch (e) {
+      CoreLog.error(e);
+    }
   }
 
   /// 登录弹幕服务器并加入房间
@@ -296,12 +323,54 @@ class DouyuDanmaku implements LiveDanmaku {
     return str.replaceAll("@", "@A").replaceAll("/", "@S");
   }
 
+  /// 是否已被 stop()（避免预热任务在关房后又把发送连接连起来）
+  bool _stopped = false;
+
+  /// 预热发送连接：进房后后台建连 + loginreq，让第一条弹幕不用现连现登录。
+  ///
+  /// * 延迟 1.5 秒再动手：刚进房时关注刷新会打出一波并发请求，先错峰；
+  /// * 失败静默：wsproxy 偶发不回 loginres 是常态，不能因此弹提示，
+  ///   真正发送时 [sendDanmaku] 还会按原有逻辑重试三次；
+  /// * 用户不发弹幕的房间里，这就是一条空闲 WS（心跳 30 秒），可接受。
+  Future<void> _preheatSender() async {
+    await Future.delayed(const Duration(milliseconds: 1500));
+    if (_stopped || !danmakuArgs.canSend || _senderReady) {
+      return;
+    }
+    try {
+      final error = await _ensureSender();
+      if (error == null) {
+        CoreLog.i("斗鱼发送：进房预热完成，发送时零等待");
+      } else {
+        CoreLog.d("斗鱼发送：进房预热未成功（不影响观看，发送时会重试）→ $error");
+      }
+    } catch (e) {
+      CoreLog.d("斗鱼发送：进房预热异常（忽略）$e");
+    }
+  }
+
+  /// 正在进行的建连/登录任务：预热和真正发送可能同时触发，
+  /// 必须串行复用同一个 Future，否则两条路径会互相覆盖 completer。
+  Future<String?>? _senderFuture;
+
   /// 建立发送连接并登录：成功返回 null，失败返回错误文案
   ///
   /// 斗鱼的会话是「单点登录」：这套凭证在哪台设备上用，服务端就把弹幕会话
   /// 切到哪台（旧设备会被断开）。所以这里不弹任何「重新登录」提示，
   /// 每次发送都自动（重）登录，必要时重连一次再试，实现无缝接管。
-  Future<String?> _ensureSender() async {
+  Future<String?> _ensureSender() {
+    final running = _senderFuture;
+    if (running != null) {
+      return running;
+    }
+    final future = _ensureSenderInner().whenComplete(() {
+      _senderFuture = null;
+    });
+    _senderFuture = future;
+    return future;
+  }
+
+  Future<String?> _ensureSenderInner() async {
     if (danmakuArgs.jwtExpired) {
       return "斗鱼登录已过期（dmjwt 失效），请重新登录斗鱼";
     }
@@ -364,7 +433,8 @@ class DouyuDanmaku implements LiveDanmaku {
     _senderReady = false;
     _senderSocket?.connect();
     try {
-      await login.future.timeout(const Duration(seconds: 4));
+      // 1.5 秒没回 loginres 就换节点重试（原来 4 秒，遇到坏节点要白等 4 秒）
+      await login.future.timeout(const Duration(milliseconds: 1500));
     } on TimeoutException {
       return "斗鱼发送连接登录超时";
     } finally {
@@ -611,6 +681,7 @@ class DouyuDanmaku implements LiveDanmaku {
 
   @override
   Future stop() async {
+    _stopped = true;
     onMessage = null;
     onClose = null;
     webScoketUtils?.close();
@@ -619,8 +690,21 @@ class DouyuDanmaku implements LiveDanmaku {
     _senderSocket = null;
     _senderReady = false;
     _senderLoginCompleter = null;
+    _senderFuture = null;
     _chatresCompleter = null;
   }
+
+  /// 诊断用：每种未处理的消息类型记录前 3 条样本
+  final Map<String, int> _loggedUnknownTypes = <String, int>{};
+  /// 诊断用：语音/高能弹幕相关帧最多记录 30 条原始报文
+  int _voiceProbeCount = 0;
+  /// 诊断用：没有 dms 字段被丢弃的 chatmsg 最多记录 5 条
+  int _noDmsChatCount = 0;
+  /// 已入库的付费留言 vrid，避免同一条重复建卡
+  final Set<String> _voiceIds = <String>{};
+
+  String _truncateRaw(String raw) =>
+      raw.length <= 800 ? raw : "${raw.substring(0, 800)}…(len=${raw.length})";
 
   void decodeMessage(List<int> data) {
     try {
@@ -631,6 +715,22 @@ class DouyuDanmaku implements LiveDanmaku {
       var jsonData = sttToJObject(result);
 
       var type = jsonData["type"]?.toString();
+      // 诊断：任何和语音/高能弹幕沾边的帧都留原始报文（最多 30 条），
+      // 用来定位「听到了语音播报但没有卡片」的那类消息。
+      if (_voiceProbeCount < 30 &&
+          !result.contains("type@=chatmsg") &&
+          (result.contains("voice") ||
+              result.contains("voc") ||
+              result.contains("高能") ||
+              result.contains("voiceDanmu"))) {
+        _voiceProbeCount++;
+        CoreLog.i("斗鱼弹幕：语音相关帧#" +
+            _voiceProbeCount.toString() +
+            " type=" +
+            (type ?? "?") +
+            " 原始=" +
+            _truncateRaw(result));
+      }
       // 登录响应：到这里才算真正登录成功
       if (type == "loginres") {
         var login = _loginCompleter;
@@ -643,18 +743,37 @@ class DouyuDanmaku implements LiveDanmaku {
       if (type == "chatmsg") {
         // 屏蔽阴间弹幕
         if (jsonData["dms"] == null) {
+          if (_noDmsChatCount < 5) {
+            _noDmsChatCount++;
+            CoreLog.i("斗鱼弹幕：chatmsg 缺 dms 被丢弃#" +
+                _noDmsChatCount.toString() +
+                " 原始=" +
+                _truncateRaw(result));
+          }
           return;
         }
         var col = int.tryParse(jsonData["col"].toString()) ?? 0;
         var isSelf = danmakuArgs.uid.isNotEmpty &&
             jsonData["uid"]?.toString() == danmakuArgs.uid;
+        var txt = jsonData["txt"]?.toString() ?? "";
+        // 钻粉专属表情 / 房间表情：正文里的 [表情名] 换成图片
+        var spans = DouyuEmoticon.parseSpans(txt, _emoticons);
         var liveMsg = LiveMessage(
           type: LiveMessageType.chat,
           userName: jsonData["nn"].toString(),
-          message: jsonData["txt"].toString(),
+          message: txt,
           color: getColor(col),
           // 自己发的弹幕：画面弹幕会加描边突出
           isSelf: isSelf,
+          spans: spans,
+          imageUrls: spans == null
+              ? null
+              : spans
+                  .where((e) => e.isImage)
+                  .map((e) => e.imageUrl!.trim())
+                  .toList(),
+          // 整条弹幕只有表情图片（钻粉表情）时标记出来，供「屏蔽图片表情」过滤
+          isRoomEmoji: spans != null && DouyuEmoticon.isOnlyEmoticon(spans),
         );
 
         // 自己的弹幕被广播回来 → 说明确实发出去了，直接判成功
@@ -669,10 +788,362 @@ class DouyuDanmaku implements LiveDanmaku {
         }
 
         onMessage?.call(liveMsg);
+        return;
+      }
+      // 付费留言（高能弹幕）：房间内的 comm_chatmsg 广播，btype=voiceDanmu
+      // 带 rid 能明确是哪个房间（voice_trlt 不带 rid，会串到别的房间）
+      if (type == "comm_chatmsg") {
+        _handleCommChatMsg(jsonData);
+        return;
+      }
+      // voice_trlt：兜底来源，真正的卡片优先用上面的 comm_chatmsg（带 rid 不串房）
+      if (type == "voice_trlt") {
+        _handleVoiceTrlt(jsonData);
+        return;
+      }
+      // 其它暂未处理的类型：每种只记录一条样本，便于后续接入
+      if (type != null && type.isNotEmpty) {
+        final seen = _loggedUnknownTypes[type] ?? 0;
+        if (seen < 3) {
+          _loggedUnknownTypes[type] = seen + 1;
+          CoreLog.i("斗鱼弹幕：未处理消息 type=" +
+              type +
+              " #" +
+              (seen + 1).toString() +
+              " 样本=" +
+              _truncateRaw(result));
+        }
       }
     } catch (e) {
       CoreLog.error(e);
     }
+  }
+
+  /// 解析高能弹幕（付费留言 / 语音弹幕）的下发事件。
+  ///
+  /// 真实报文（2026-11-11 房间 2016309 抓到）：
+  /// `danmuShowSwitch=1/mtype=2/totalNum=0/type=voice_trlt/list=<条目的 STT 串>/isShow=1`
+  /// * `mtype`：1=进房全量下发，2=新增一条，其它=移除
+  /// * 条目字段：`vrId` 唯一 id、`un` 昵称、`uat` 头像、`content` 正文、
+  ///   `price`/`realPrice` 单位分（3000 = 30 元）、`stime` 停留秒数、
+  ///   `etimeV2` 过期时间戳、`uid`、`vocUrl` 语音文件、`vocNickUrl` 昵称语音、`isVoc`、`mf`
+  /// * 坑：STT 解码后 URL 里的 `//` 会被拆成数组（`["https:", "host/path"]`），要拼回去
+  void _handleVoiceTrlt(Map<dynamic, dynamic> jsonData) {
+    try {
+      final mtype = int.tryParse(jsonData["mtype"]?.toString() ?? "") ?? 2;
+      final items = _decodeVoiceList(jsonData["list"]);
+      CoreLog.d("斗鱼弹幕：voice_trlt mtype=$mtype items=${items.length}");
+      for (final item in items) {
+        final map = _decodeVoiceItem(item);
+        if (map == null) {
+          continue;
+        }
+        final vrid = map["vrId"]?.toString() ?? "";
+        final price = _voicePriceYuan(map);
+        // 兜底：万一某条付费留言没有 comm_chatmsg（房间广播），用增量下发补一张卡。
+        // 注意 voice_trlt 不带 rid，进房全量（mtype=1）可能包含别的房间，只认增量。
+        final endTime = _voiceEndTime(map);
+        // price=0 是「免费高能弹幕」（平台送的自由留言），同样要出卡，
+        // 之前用 price > 0 把免费的整条静默丢掉了。
+        if (mtype == 2 && endTime.isAfter(DateTime.now())) {
+          if (vrid.isNotEmpty && !_voiceIds.add(vrid)) {
+            continue;
+          }
+          _emitVoiceCard(
+            id: vrid,
+            userName: _voiceUserName(map),
+            face: _voiceFace(map),
+            text: _voiceText(map),
+            price: price,
+            seconds: endTime.difference(DateTime.now()).inSeconds,
+            source: "voice_trlt",
+          );
+        }
+      }
+    } catch (e) {
+      CoreLog.error(e);
+    }
+  }
+
+  /// 付费留言（高能弹幕）的房间广播：`type=comm_chatmsg&btype=voiceDanmu`。
+  ///
+  /// 真实报文（2026-11-12 房间 12306 抓到）：
+  /// `vrid=2120815116315275264/btype=voiceDanmu/chatmsg=<内嵌 chatmsg>/
+  /// range=2/cprice=3000/cmgType=1/type=comm_chatmsg/rid=12306/gbtemp=2/
+  /// uid=455987653/crealPrice=3000/cet=60/now=<毫秒>/csuperScreen=0/danmucr=1`
+  /// * `cprice`/`crealPrice` 单位分（3000 = 30 元）
+  /// * `cet` 画面停留秒数；`danmucr` 1=蓝 2=红 3=黄
+  /// * 内嵌 `chatmsg` 里才是内容：`nn` 昵称、`txt` 正文、`uid`、`ic` 头像相对路径
+  /// * 关键是带 `rid`：voice_trlt 不带房间号，串房会串到别的房间去
+  void _handleCommChatMsg(Map<dynamic, dynamic> jsonData) {
+    try {
+      if (jsonData["btype"]?.toString() != "voiceDanmu") {
+        return;
+      }
+      CoreLog.d(
+        "斗鱼弹幕：comm_chatmsg voiceDanmu rid=${jsonData["rid"]} "
+        "vrid=${jsonData["vrid"]} cprice=${jsonData["cprice"]}",
+      );
+      final roomId = jsonData["rid"]?.toString() ?? "";
+      if (danmakuArgs.roomId.isNotEmpty && roomId != danmakuArgs.roomId) {
+        // 斗鱼会把已加入房间的广播都推过来，别的房间的高能弹幕要丢掉
+        return;
+      }
+      final vrid = jsonData["vrid"]?.toString() ?? "";
+      if (vrid.isNotEmpty && !_voiceIds.add(vrid)) {
+        return;
+      }
+      final rawChat = jsonData["chatmsg"];
+      final Map<String, dynamic>? chat;
+      if (rawChat is Map) {
+        // 正常情况：STT 已经把内嵌 chatmsg 解成了 Map
+        chat = rawChat.map((k, v) => MapEntry(k.toString(), v));
+      } else {
+        chat = _decodeVoiceItem(sttToJObject(rawChat?.toString() ?? ""));
+      }
+      final text = (chat?["txt"]?.toString() ?? "").trim();
+      if (text.isEmpty) {
+        return;
+      }
+      final userName = (chat?["nn"]?.toString() ?? "").trim();
+      final price = _voicePriceYuan({
+        "realPrice": jsonData["crealPrice"]?.toString() ?? "",
+        "price": jsonData["cprice"]?.toString() ?? "",
+      });
+      _emitVoiceCard(
+        id: vrid,
+        userName: userName,
+        face: chat == null ? "" : _voiceFace(chat),
+        text: text,
+        price: price,
+        seconds: int.tryParse(jsonData["cet"]?.toString() ?? "") ?? 60,
+        color: int.tryParse(jsonData["danmucr"]?.toString() ?? ""),
+        source: "comm_chatmsg",
+      );
+    } catch (e) {
+      CoreLog.error(e);
+    }
+  }
+
+  /// 付费留言统一出口：建 SC 卡片 + 推给上层（两个来源共用，按 id 去重）
+  void _emitVoiceCard({
+    required String id,
+    required String userName,
+    required String face,
+    required String text,
+    required int price,
+    required int seconds,
+    int? color,
+    required String source,
+  }) {
+    if (text.trim().isEmpty) {
+      return;
+    }
+    final colors = _voiceScColors(price, color: color);
+    final now = DateTime.now();
+    final endTime = now.add(Duration(seconds: seconds <= 0 ? 60 : seconds));
+    final sc = LiveSuperChatMessage(
+      id: id,
+      userName: userName.trim().isEmpty ? "神秘人" : userName.trim(),
+      face: face,
+      message: text.trim(),
+      price: price,
+      startTime: now,
+      endTime: endTime,
+      backgroundColor: colors.header,
+      backgroundBottomColor: colors.body,
+    );
+    CoreLog.i(
+      "斗鱼弹幕：付费留言入库[$source] id=$id user=${sc.userName} "
+      "price=$price seconds=$seconds text=${_truncateRaw(sc.message)}",
+    );
+    onMessage?.call(
+      LiveMessage(
+        type: LiveMessageType.superChat,
+        userName: sc.userName,
+        message: sc.message,
+        color: LiveMessageColor.white,
+        data: sc,
+      ),
+    );
+  }
+
+  /// 斗鱼头像：ic 是相对路径（avatar/default/15、avatar_v3/202609/xxx），
+  /// 拼成 http 地址并补 `_big.jpg`（已验证 200 image/jpeg）
+  String _douyuAvatar(dynamic raw) {
+    final path = _voiceUrl(raw).trim();
+    if (path.isEmpty || path == "0" || path == "null") {
+      return "";
+    }
+    if (path.startsWith("http")) {
+      return path;
+    }
+    final url = "https://apic.douyucdn.cn/upload/$path";
+    return path.contains(".") ? url : "${url}_big.jpg";
+  }
+
+  /// voice_trlt 的 list 是「字符串套字符串」，最多解两层
+  List<dynamic> _decodeVoiceList(dynamic raw) {
+    var value = raw;
+    for (var i = 0; i < 2; i++) {
+      if (value is String) {
+        final text = value.trim();
+        if (text.isEmpty) {
+          return [];
+        }
+        try {
+          value = json.decode(text);
+        } catch (_) {
+          // 不是 JSON：可能是单个 STT 条目，交给 _decodeVoiceItem 处理
+          return text.contains("@=") || text.contains("@A=") ? [text] : [];
+        }
+      }
+    }
+    return value is List ? value : [];
+  }
+
+  Map<String, dynamic>? _decodeVoiceItem(dynamic item) {
+    var value = item;
+    if (value is String) {
+      final text = value.trim();
+      if (text.isEmpty) {
+        return null;
+      }
+      try {
+        value = json.decode(text);
+      } catch (_) {
+        // 实测有些 voice_trlt 的 list 元素是 STT 串而不是 JSON，
+        // 以前这里直接 return null → 整条付费留言被丢掉（16:50、17:10 那两条）
+        if (text.contains("@=") || text.contains("@A=")) {
+          value = sttToJObject(text);
+        } else {
+          return null;
+        }
+      }
+    }
+    if (value is Map) {
+      return value.map((k, v) => MapEntry(k.toString(), v));
+    }
+    return null;
+  }
+
+  String _voiceUserName(Map<String, dynamic> item) {
+    for (final key in ["un", "nn", "userNick", "nickname", "name"]) {
+      final value = item[key]?.toString().trim() ?? "";
+      if (value.isNotEmpty && value != "null") {
+        return value;
+      }
+    }
+    return "神秘人";
+  }
+
+  /// 头像：uat / ic 可能是完整 URL，也可能是相对路径（补 _big.jpg）
+  String _voiceFace(Map<String, dynamic> item) {
+    for (final key in ["uat", "userIcon", "ic", "avatar", "pic"]) {
+      final value = _douyuAvatar(item[key]);
+      if (value.isNotEmpty && value != "0") {
+        return value;
+      }
+    }
+    return "";
+  }
+
+  /// URL 归一化。
+  ///
+  /// STT 解析会把 `https://host/path` 里的 `//` 当成数组分隔符拆成
+  /// `["https:", "host/path"]`，这里再拼回来；字符串则原样返回。
+  String _voiceUrl(dynamic raw) {
+    if (raw == null) {
+      return "";
+    }
+    if (raw is List) {
+      final parts = raw
+          .map((e) => e?.toString().trim() ?? "")
+          .where((e) => e.isNotEmpty && e != "null")
+          .toList();
+      if (parts.isEmpty) {
+        return "";
+      }
+      // 首段形如 "https:"，后面补两段斜杠才是完整 URL
+      if (parts.first.endsWith(":")) {
+        return "${parts.first}//${parts.skip(1).join('/')}";
+      }
+      return parts.join("/");
+    }
+    final text = raw.toString().trim();
+    return text == "null" ? "" : text;
+  }
+
+  /// 高能弹幕的语音文件地址（真实报文里的 vocUrl），暂时只记录不播放
+  String _voiceAudioUrl(Map<String, dynamic> item) => _voiceUrl(item["vocUrl"]);
+
+  /// 高能弹幕正文（真实报文里是 `content`）
+  String _voiceText(Map<String, dynamic> item) {
+    for (final key in ["content", "txt", "text", "msg", "danmu", "dn"]) {
+      final value = item[key]?.toString().trim() ?? "";
+      if (value.isNotEmpty && value != "null") {
+        return value;
+      }
+    }
+    return "（语音弹幕）";
+  }
+
+  /// 金额：网页端 price 单位是「分」（Math.floor(price/100) 才是元）
+  int _voicePriceYuan(Map<String, dynamic> item) {
+    final raw = item["realPrice"] ?? item["price"];
+    final value = double.tryParse(raw?.toString() ?? "") ?? 0;
+    if (value <= 0) {
+      return 0;
+    }
+    return value >= 100 ? (value / 100).round() : value.round();
+  }
+
+  DateTime _voiceEndTime(Map<String, dynamic> item) {
+    final now = DateTime.now();
+    final expire = int.tryParse(item["etimeV2"]?.toString() ?? "");
+    if (expire != null && expire > 0) {
+      return DateTime.fromMillisecondsSinceEpoch(expire * 1000);
+    }
+    final seconds = int.tryParse(
+          item["stime"]?.toString() ?? item["hoverTime"]?.toString() ?? "",
+        ) ??
+        30;
+    return now.add(Duration(seconds: seconds <= 0 ? 30 : seconds));
+  }
+
+  /// SC 卡片两段色：档位与 App 的 superChatTierColor 保持一致
+  ({String header, String body}) _voiceScColors(int price, {int? color}) {
+    var rgb = 0x2A60B2;
+    if (color == 2) {
+      // 网页端 danmucr=2 红
+      rgb = 0xD64545;
+    } else if (color == 3) {
+      // danmucr=3 黄
+      rgb = 0xF0A83C;
+    } else if (color == 1) {
+      rgb = 0x2A60B2;
+    } else if (price >= 2000) {
+      rgb = 0xA0228C;
+    } else if (price >= 1000) {
+      rgb = 0xD64545;
+    } else if (price >= 500) {
+      rgb = 0xE8722C;
+    } else if (price >= 100) {
+      rgb = 0xF0A83C;
+    } else if (price >= 50) {
+      rgb = 0x00AEEC;
+    }
+    final r = (rgb >> 16) & 0xFF;
+    final g = (rgb >> 8) & 0xFF;
+    final b = rgb & 0xFF;
+    String tint(int channel) => (channel + (255 - channel) * 0.82)
+        .round()
+        .toRadixString(16)
+        .padLeft(2, "0");
+    return (
+      header: "${tint(r)}${tint(g)}${tint(b)}",
+      body: rgb.toRadixString(16).padLeft(6, "0"),
+    );
   }
 
   /// 组包。[type] 默认 689（登录/心跳）；发弹幕要用 690（实测网页版如此）

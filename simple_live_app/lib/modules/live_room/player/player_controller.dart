@@ -50,7 +50,7 @@ mixin PlayerMixin {
       }
     }
     // media_kit 仓库更新导致的问题，临时解决办法
-    if(Platform.isAndroid){
+    if (Platform.isAndroid) {
       await pp.setProperty('force-seekable', 'yes');
     }
   }
@@ -275,6 +275,9 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   /// 进入全屏
   void enterFullScreen() {
     fullScreenState.value = true;
+    // 进出全屏一律复位锁定态与全屏输入框，避免“锁一次一直锁”/输入框残留
+    lockControlsState.value = false;
+    onFullScreenStateReset();
     if (Platform.isAndroid || Platform.isIOS) {
       //全屏
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
@@ -298,9 +301,14 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
       windowManager.setFullScreen(false);
     }
     fullScreenState.value = false;
+    lockControlsState.value = false;
+    onFullScreenStateReset();
 
     //danmakuController?.clear();
   }
+
+  /// 进入/退出全屏时复位子类状态（全屏输入框等），由 LiveRoomController 覆写
+  void onFullScreenStateReset() {}
 
   Size? _lastWindowSize;
   Offset? _lastWindowPosition;
@@ -665,14 +673,36 @@ class PlayerController extends BaseController
         PlayerStateMixin,
         PlayerDanmakuMixin,
         PlayerSystemMixin,
-        PlayerGestureControlMixin {
+        PlayerGestureControlMixin,
+        WindowListener {
   @override
   void onInit() {
     initSystem();
     initStream();
     //设置音量
     player.setVolume(AppSettingsController.instance.playerVolume.value);
+    // 桌面端：监听窗口全屏变化（F11 / ESC / 双击标题栏），同步 App 的全屏状态
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      windowManager.addListener(this);
+    }
     super.onInit();
+  }
+
+  /// 窗口层面进入全屏（F11 / 双击标题栏等）时同步 App 状态
+  @override
+  void onWindowEnterFullScreen() {
+    if (Platform.isAndroid || Platform.isIOS) return;
+    fullScreenState.value = true;
+  }
+
+  /// 窗口层面离开全屏（ESC / F11 等）时同步 App 状态并解锁，
+  /// 否则会出现“窗口已退出全屏，界面还停在全屏且锁定”的问题
+  @override
+  void onWindowLeaveFullScreen() {
+    if (Platform.isAndroid || Platform.isIOS) return;
+    fullScreenState.value = false;
+    lockControlsState.value = false;
+    onFullScreenStateReset();
   }
 
   /// 起播计时：open 前设置，首帧（宽或高首次非空）时打印耗时
@@ -850,6 +880,9 @@ class PlayerController extends BaseController
   @override
   void onClose() async {
     Log.w("播放器关闭");
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      windowManager.removeListener(this);
+    }
     if (smallWindowState.value) {
       exitSmallWindow();
     }

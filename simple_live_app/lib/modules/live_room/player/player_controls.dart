@@ -13,6 +13,7 @@ import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
 import 'package:simple_live_app/modules/settings/danmu_settings_page.dart';
+import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/follow_service.dart';
 import 'package:simple_live_app/widgets/desktop_refresh_button.dart';
 import 'package:simple_live_app/widgets/follow_user_item.dart';
@@ -59,22 +60,22 @@ Widget buildFullControls(
                 ((!Platform.isAndroid && !Platform.isIOS) ||
                     controller.fullScreenState.value),
             child: Builder(
-            builder: (context) {
-              var size = MediaQuery.of(context).size;
-              var phone = Platform.isAndroid || Platform.isIOS;
-              // 手机横屏：贴在控制条上方；桌面/大屏：从屏高 28% 处开始往上堆
-              var bottom = phone ? 56.0 : size.height * 0.28;
-              return Positioned(
-                left: 16,
-                bottom: bottom,
-                child: PlayerSuperChatOverlay(
-                  controller: controller,
-                  isPortrait: isPortrait,
-                  bottomInset: bottom,
-                ),
-              );
-            },
-          ),
+              builder: (context) {
+                var size = MediaQuery.of(context).size;
+                var phone = Platform.isAndroid || Platform.isIOS;
+                // 手机横屏：贴在控制条上方；桌面/大屏：从屏高 28% 处开始往上堆
+                var bottom = phone ? 56.0 : size.height * 0.28;
+                return Positioned(
+                  left: 16,
+                  bottom: bottom,
+                  child: PlayerSuperChatOverlay(
+                    controller: controller,
+                    isPortrait: isPortrait,
+                    bottomInset: bottom,
+                  ),
+                );
+              },
+            ),
           ),
         ),
 
@@ -128,281 +129,306 @@ Widget buildFullControls(
         ),
 
         // 顶部
-        Obx(
-          () => AnimatedPositioned(
-            left: 0,
-            right: 0,
-            top: (controller.showControlsState.value &&
-                    !controller.lockControlsState.value)
-                ? 0
-                : -(48 + padding.top),
-            duration: const Duration(milliseconds: 200),
-            child: Container(
-              height: 48 + padding.top,
-              padding: EdgeInsets.only(
-                left: padding.left + 12,
-                right: padding.right + 12,
-                top: padding.top,
-              ),
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.bottomCenter,
-                  end: Alignment.topCenter,
-                  colors: [
-                    Colors.transparent,
-                    Colors.black87,
-                  ],
+        ExcludeFocus(
+          excluding: !Platform.isAndroid && !Platform.isIOS,
+          child: Obx(
+            () => AnimatedPositioned(
+              left: 0,
+              right: 0,
+              top: (controller.showControlsState.value &&
+                      !controller.lockControlsState.value)
+                  ? 0
+                  : -(48 + padding.top),
+              duration: const Duration(milliseconds: 200),
+              child: Container(
+                height: 48 + padding.top,
+                padding: EdgeInsets.only(
+                  left: padding.left + 12,
+                  right: padding.right + 12,
+                  top: padding.top,
                 ),
-              ),
-              child: Row(
-                children: [
-                  IconButton(
-                    onPressed: () {
-                      if (controller.smallWindowState.value) {
-                        controller.exitSmallWindow();
-                      } else {
-                        controller.exitFull();
-                      }
-                    },
-                    icon: const Icon(
-                      Icons.arrow_back,
-                      color: Colors.white,
-                      size: 24,
-                    ),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
+                    colors: [
+                      Colors.transparent,
+                      Colors.black87,
+                    ],
                   ),
-                  AppStyle.hGap12,
-                  Expanded(
-                    child: Text(
-                      "${controller.detail.value?.title} - ${controller.detail.value?.userName}",
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: Colors.white, fontSize: 16),
-                    ),
-                  ),
-                  AppStyle.hGap12,
-                  IconButton(
-                    onPressed: () {
-                      controller.saveScreenshot();
-                    },
-                    icon: const Icon(
-                      Icons.camera_alt_outlined,
-                      color: Colors.white,
-                      size: 24,
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: () {
-                      showFollowUser(controller);
-                    },
-                    icon: const Icon(
-                      Remix.play_list_2_line,
-                      color: Colors.white,
-                      size: 24,
-                    ),
-                  ),
-                  Visibility(
-                    visible: Platform.isAndroid,
-                    child: IconButton(
+                ),
+                child: Row(
+                  children: [
+                    IconButton(
                       onPressed: () {
-                        controller.enablePIP();
+                        if (controller.smallWindowState.value) {
+                          controller.exitSmallWindow();
+                        } else {
+                          controller.exitFull();
+                        }
                       },
                       icon: const Icon(
-                        Icons.picture_in_picture,
+                        Icons.arrow_back,
                         color: Colors.white,
                         size: 24,
                       ),
                     ),
-                  ),
-                  IconButton(
-                    onPressed: () {
-                      showPlayerSettings(controller);
-                    },
-                    icon: const Icon(
-                      Icons.more_horiz,
-                      color: Colors.white,
-                      size: 24,
+                    AppStyle.hGap12,
+                    Expanded(
+                      child: Text(
+                        "${controller.detail.value?.title} - ${controller.detail.value?.userName}",
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style:
+                            const TextStyle(color: Colors.white, fontSize: 16),
+                      ),
                     ),
-                  ),
-                ],
+                    AppStyle.hGap12,
+                    IconButton(
+                      onPressed: () {
+                        controller.saveScreenshot();
+                      },
+                      icon: const Icon(
+                        Icons.camera_alt_outlined,
+                        color: Colors.white,
+                        size: 24,
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () {
+                        showFollowUser(controller);
+                      },
+                      icon: const Icon(
+                        Remix.play_list_2_line,
+                        color: Colors.white,
+                        size: 24,
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () {
+                        showRoomHistory(controller);
+                      },
+                      icon: const Icon(
+                        Remix.history_line,
+                        color: Colors.white,
+                        size: 24,
+                      ),
+                    ),
+                    Visibility(
+                      visible: Platform.isAndroid,
+                      child: IconButton(
+                        onPressed: () {
+                          controller.enablePIP();
+                        },
+                        icon: const Icon(
+                          Icons.picture_in_picture,
+                          color: Colors.white,
+                          size: 24,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () {
+                        showPlayerSettings(controller);
+                      },
+                      icon: const Icon(
+                        Icons.more_horiz,
+                        color: Colors.white,
+                        size: 24,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
         ),
         // 底部
-        Obx(
-          () => AnimatedPositioned(
-            left: 0,
-            right: 0,
-            bottom: (controller.showControlsState.value &&
-                    !controller.lockControlsState.value)
-                ? 0
-                : -(80 + padding.bottom),
-            duration: const Duration(milliseconds: 200),
-            child: Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.transparent,
-                    Colors.black87,
-                  ],
-                ),
-              ),
-              padding: EdgeInsets.only(
-                left: padding.left + 12,
-                right: padding.right + 12,
-                bottom: padding.bottom,
-              ),
-              child: Row(
-                children: [
-                  IconButton(
-                    onPressed: () {
-                      controller.refreshRoom();
-                    },
-                    icon: const Icon(
-                      Remix.refresh_line,
-                      color: Colors.white,
-                    ),
-                  ),
-                  Offstage(
-                    offstage: controller.showDanmakuState.value,
-                    child: IconButton(
-                      onPressed: () => controller.showDanmakuState.value =
-                          !controller.showDanmakuState.value,
-                      icon: const ImageIcon(
-                        AssetImage('assets/icons/icon_danmaku_open.png'),
-                        size: 24,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                  Offstage(
-                    offstage: !controller.showDanmakuState.value,
-                    child: IconButton(
-                      onPressed: () => controller.showDanmakuState.value =
-                          !controller.showDanmakuState.value,
-                      icon: const ImageIcon(
-                        AssetImage('assets/icons/icon_danmaku_close.png'),
-                        size: 24,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: () {
-                      showDanmakuSettings(controller);
-                    },
-                    icon: const ImageIcon(
-                      AssetImage('assets/icons/icon_danmaku_setting.png'),
-                      size: 24,
-                      color: Colors.white,
-                    ),
-                  ),
-                  Obx(
-                    () => Padding(
-                      padding: const EdgeInsets.only(left: 8.0),
-                      child: Text(
-                        controller.liveDuration.value,
-                        style:
-                            const TextStyle(fontSize: 14, color: Colors.white),
-                      ),
-                    ),
-                  ),
-                Expanded(
-                  child: Obx(
-                    () => !AppSettingsController
-                                .instance.playerSendDanmaku.value ||
-                            !controller.canSendDanmaku.value ||
-                            !(Platform.isAndroid || Platform.isIOS)
-                        ? const Center()
-                        : Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                            child: DanmakuInputBar(
-                              controller: controller,
-                              overlay: true,
-                              compact: true,
-                            ),
-                          ),
+        ExcludeFocus(
+          excluding: !Platform.isAndroid && !Platform.isIOS,
+          child: Obx(
+            () => AnimatedPositioned(
+              left: 0,
+              right: 0,
+              bottom: (controller.showControlsState.value &&
+                      !controller.lockControlsState.value)
+                  ? 0
+                  : -(80 + padding.bottom),
+              duration: const Duration(milliseconds: 200),
+              child: Container(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.transparent,
+                      Colors.black87,
+                    ],
                   ),
                 ),
-                  Visibility(
-                    visible: !Platform.isAndroid && !Platform.isIOS,
-                    child: IconButton(
-                      key: volumeButtonkey,
+                padding: EdgeInsets.only(
+                  left: padding.left + 12,
+                  right: padding.right + 12,
+                  bottom: padding.bottom,
+                ),
+                child: Row(
+                  children: [
+                    IconButton(
                       onPressed: () {
-                        controller
-                            .showVolumeSlider(volumeButtonkey.currentContext!);
+                        controller.refreshRoom();
                       },
                       icon: const Icon(
-                        Icons.volume_down,
+                        Remix.refresh_line,
+                        color: Colors.white,
+                      ),
+                    ),
+                    Offstage(
+                      offstage: controller.showDanmakuState.value,
+                      child: IconButton(
+                        onPressed: () => controller.showDanmakuState.value =
+                            !controller.showDanmakuState.value,
+                        icon: const ImageIcon(
+                          AssetImage('assets/icons/icon_danmaku_open.png'),
+                          size: 24,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                    Offstage(
+                      offstage: !controller.showDanmakuState.value,
+                      child: IconButton(
+                        onPressed: () => controller.showDanmakuState.value =
+                            !controller.showDanmakuState.value,
+                        icon: const ImageIcon(
+                          AssetImage('assets/icons/icon_danmaku_close.png'),
+                          size: 24,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () {
+                        showDanmakuSettings(controller);
+                      },
+                      icon: const ImageIcon(
+                        AssetImage('assets/icons/icon_danmaku_setting.png'),
                         size: 24,
                         color: Colors.white,
                       ),
                     ),
-                  ),
-                  TextButton(
-                    onPressed: () {
-                      showQualitesInfo(controller);
-                    },
-                    child: Obx(
-                      () => Text(
-                        controller.currentQualityInfo.value,
+                    Obx(
+                      () => Padding(
+                        padding: const EdgeInsets.only(left: 8.0),
+                        child: Text(
+                          controller.liveDuration.value,
+                          style: const TextStyle(
+                              fontSize: 14, color: Colors.white),
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Obx(
+                        () => !AppSettingsController
+                                    .instance.playerSendDanmaku.value ||
+                                !controller.canSendDanmaku.value ||
+                                !(Platform.isAndroid || Platform.isIOS)
+                            ? const Center()
+                            : Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 12),
+                                child: DanmakuInputBar(
+                                  controller: controller,
+                                  overlay: true,
+                                  compact: true,
+                                ),
+                              ),
+                      ),
+                    ),
+                    Visibility(
+                      visible: !Platform.isAndroid && !Platform.isIOS,
+                      child: IconButton(
+                        key: volumeButtonkey,
+                        onPressed: () {
+                          controller.showVolumeSlider(
+                              volumeButtonkey.currentContext!);
+                        },
+                        icon: const Icon(
+                          Icons.volume_down,
+                          size: 24,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        showQualitesInfo(controller);
+                      },
+                      child: Obx(
+                        () => Text(
+                          controller.currentQualityInfo.value,
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 15),
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        showLinesInfo(controller);
+                      },
+                      child: Text(
+                        controller.currentLineInfo.value,
                         style:
                             const TextStyle(color: Colors.white, fontSize: 15),
                       ),
                     ),
-                  ),
-                  TextButton(
-                    onPressed: () {
-                      showLinesInfo(controller);
-                    },
-                    child: Text(
-                      controller.currentLineInfo.value,
-                      style: const TextStyle(color: Colors.white, fontSize: 15),
+                    IconButton(
+                      onPressed: () {
+                        if (controller.smallWindowState.value) {
+                          controller.exitSmallWindow();
+                        } else {
+                          controller.exitFull();
+                        }
+                      },
+                      icon: const Icon(
+                        Remix.fullscreen_exit_fill,
+                        color: Colors.white,
+                      ),
                     ),
-                  ),
-                  IconButton(
-                    onPressed: () {
-                      if (controller.smallWindowState.value) {
-                        controller.exitSmallWindow();
-                      } else {
-                        controller.exitFull();
-                      }
-                    },
-                    icon: const Icon(
-                      Remix.fullscreen_exit_fill,
-                      color: Colors.white,
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
         ),
 
         // 右侧锁定
-        Obx(
-          () => AnimatedPositioned(
-            top: 0,
-            bottom: 0,
-            right: controller.showControlsState.value
-                ? padding.right + 12
-                : -(64 + padding.right),
-            duration: const Duration(milliseconds: 200),
-            child: buildLockButton(controller),
+        ExcludeFocus(
+          excluding: !Platform.isAndroid && !Platform.isIOS,
+          child: Obx(
+            () => AnimatedPositioned(
+              top: 0,
+              bottom: 0,
+              right: controller.showControlsState.value
+                  ? padding.right + 12
+                  : -(64 + padding.right),
+              duration: const Duration(milliseconds: 200),
+              child: buildLockButton(controller),
+            ),
           ),
         ),
         // 左侧锁定
-        Obx(
-          () => AnimatedPositioned(
-            top: 0,
-            bottom: 0,
-            left: controller.showControlsState.value
-                ? padding.left + 12
-                : -(64 + padding.right),
-            duration: const Duration(milliseconds: 200),
-            child: buildLockButton(controller),
+        ExcludeFocus(
+          excluding: !Platform.isAndroid && !Platform.isIOS,
+          child: Obx(
+            () => AnimatedPositioned(
+              top: 0,
+              bottom: 0,
+              left: controller.showControlsState.value
+                  ? padding.left + 12
+                  : -(64 + padding.right),
+              duration: const Duration(milliseconds: 200),
+              child: buildLockButton(controller),
+            ),
           ),
         ),
         Obx(
@@ -990,6 +1016,126 @@ void showFollowUser(LiveRoomController controller) {
   );
 }
 
+/// 观看记录面板
+///
+/// 竖屏走底部弹层、横屏和桌面走右侧面板，形态与「关注列表」一致；
+/// 点一条记录直接切房间，不用退出当前直播间。
+void showRoomHistory(LiveRoomController controller) {
+  // 只有「手机竖屏」这一种情况用半屏底部弹层：
+  // 竖屏下右侧面板会被挤成整屏铺满，看起来像整页，所以要收成半屏。
+  // 手机横屏、桌面端继续用右侧面板（原本就没问题）。
+  final isMobile = Platform.isAndroid || Platform.isIOS;
+  final isPortrait = MediaQuery.of(Get.context!).orientation ==
+      Orientation.portrait;
+  if (isMobile && isPortrait) {
+    Utils.showBottomSheet(
+      title: "观看记录",
+      heightFactor: 0.5,
+      child: buildRoomHistoryPanel(
+        controller,
+        dismiss: () => Get.back(),
+      ),
+    );
+    return;
+  }
+
+  Utils.showRightDialog(
+    title: "观看记录",
+    width: 400,
+    useSystem: true,
+    child: buildRoomHistoryPanel(
+      controller,
+      dismiss: () => Utils.hideRightDialog(),
+    ),
+  );
+}
+
+/// 观看记录列表（全部记录，按时间倒序）
+Widget buildRoomHistoryPanel(
+  LiveRoomController controller, {
+  required VoidCallback dismiss,
+}) {
+  var list = DBService.instance.getHistores();
+  if (list.isEmpty) {
+    return const Center(
+      child: Text(
+        "暂无观看记录",
+        style: TextStyle(color: Colors.grey),
+      ),
+    );
+  }
+  return ListView.builder(
+    itemCount: list.length,
+    itemBuilder: (_, i) {
+      var item = list[i];
+      var site = Sites.allSites[item.siteId];
+      var playing = controller.rxSite.value.id == item.siteId &&
+          controller.rxRoomId.value == item.roomId;
+      return ListTile(
+        leading: NetImage(
+          item.face,
+          width: 44,
+          height: 44,
+          borderRadius: 22,
+        ),
+        title: Text(
+          item.userName,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        subtitle: Row(
+          children: [
+            Expanded(
+              child: Row(
+                children: [
+                  if (site != null) ...[
+                    Image.asset(site.logo, width: 18),
+                    AppStyle.hGap4,
+                    Text(
+                      site.name,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey,
+                      ),
+                    ),
+                  ] else
+                    Text(
+                      item.siteId,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            Text(
+              Utils.parseTime(item.updateTime),
+              style: const TextStyle(
+                fontSize: 12,
+                color: Colors.grey,
+              ),
+            ),
+          ],
+        ),
+        trailing: playing
+            ? Icon(
+                Icons.play_arrow,
+                color: Get.theme.colorScheme.primary,
+              )
+            : null,
+        onTap: () {
+          if (site == null) {
+            return;
+          }
+          dismiss();
+          controller.resetRoom(site, item.roomId);
+        },
+      );
+    },
+  );
+}
+
 /// 画面内 SC 卡片
 ///
 /// 尽量还原 B 站原版 SC 观感：
@@ -1073,7 +1219,7 @@ class SuperChatOverlayCard extends StatelessWidget {
                     ),
                     AppStyle.hGap8,
                     Text(
-                      "￥${message.price}",
+                      message.price > 0 ? "￥${message.price}" : "免费",
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
@@ -1128,6 +1274,7 @@ class SuperChatOverlayCard extends StatelessWidget {
     );
   }
 }
+
 /// 画面内 SC 悬浮层
 ///
 /// 竖屏不显示（竖屏用专门的 SC 页面查看）；横屏/宽屏显示在左下角。

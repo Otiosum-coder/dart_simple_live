@@ -22,6 +22,9 @@ import 'package:simple_live_app/models/db/history.dart';
 import 'package:simple_live_app/modules/sync/remote_sync/webdav/webdav_client.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/db_service.dart';
+import 'package:simple_live_app/services/douyin_account_service.dart';
+import 'package:simple_live_app/services/douyu_account_service.dart';
+import 'package:simple_live_app/services/huya_account_service.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
 
 class RemoteSyncWebDAVController extends BaseController {
@@ -32,6 +35,9 @@ class RemoteSyncWebDAVController extends BaseController {
   var isSyncHistories = true.obs;
   var isSyncBlockWord = true.obs;
   var isSyncBilibiliAccount = true.obs;
+  var isSyncDouyuAccount = true.obs;
+  var isSyncHuyaAccount = true.obs;
+  var isSyncDouyinAccount = true.obs;
 
   late DAVClient davClient;
   var user = "--".obs;
@@ -42,8 +48,28 @@ class RemoteSyncWebDAVController extends BaseController {
   final _userHistoriesJsonName = 'SimpleLive_histories.json';
   final _userBlockedWordJsonName = 'SimpleLive_blocked_word.json';
   final _userBilibiliAccountJsonName = 'SimpleLive_bilibili_account.json';
+  final _userDouyuAccountJsonName = 'SimpleLive_douyu_account.json';
+  final _userHuyaAccountJsonName = 'SimpleLive_huya_account.json';
+  final _userDouyinAccountJsonName = 'SimpleLive_douyin_account.json';
   final _userSettingsJsonName = 'SimpleLive_Settings.json';
   final _userTagsJsonName = 'SimpleLive_Tags.json';
+
+  /// 账号 Cookie、WebDAV 凭据与本地缓存不写进「设置」文件：
+  /// 账号有独立的备份文件与开关，凭据和缓存不该上传到云端。
+  static const List<String> _excludedSettingKeys = [
+    LocalStorageService.kBilibiliCookie,
+    LocalStorageService.kDouyuCookie,
+    LocalStorageService.kHuyaCookie,
+    LocalStorageService.kHuyaNickname,
+    LocalStorageService.kDouyinCookie,
+    LocalStorageService.kDouyinLoginCookie,
+    LocalStorageService.kWebDAVUri,
+    LocalStorageService.kWebDAVUser,
+    LocalStorageService.kWebDAVPassword,
+    LocalStorageService.kWebDAVLastUploadTime,
+    LocalStorageService.kWebDAVLastRecoverTime,
+    LocalStorageService.kBiliFollowingCache,
+  ];
 
   @override
   void onInit() {
@@ -207,9 +233,35 @@ class RemoteSyncWebDAVController extends BaseController {
           File(join(profile.path, _userBilibiliAccountJsonName));
       await bilibiliAccountJsonFile
           .writeAsString(jsonEncode(userBiliAccountCookieMap));
-      // settings
-      var settingList = LocalStorageService.instance.settingsBox.toMap();
-      var dataSettingListMap = {'data': settingList};
+      // 各平台账号（与局域网同步的 /sync/account/* 保持一致）
+      var douyuAccountJsonFile =
+          File(join(profile.path, _userDouyuAccountJsonName));
+      await douyuAccountJsonFile.writeAsString(jsonEncode({
+        'data': {'cookie': DouyuAccountService.instance.cookie}
+      }));
+      var huyaAccountJsonFile =
+          File(join(profile.path, _userHuyaAccountJsonName));
+      await huyaAccountJsonFile.writeAsString(jsonEncode({
+        'data': {'cookie': HuyaAccountService.instance.cookie}
+      }));
+      var douyinAccountJsonFile =
+          File(join(profile.path, _userDouyinAccountJsonName));
+      await douyinAccountJsonFile.writeAsString(jsonEncode({
+        'data': {
+          'cookie': DouyinAccountService.instance.cookie,
+          'loginCookie': DouyinAccountService.instance.loginCookie,
+        }
+      }));
+      // settings（剔除账号 Cookie / WebDAV 凭据 / 本地缓存）
+      var settingMap = <String, dynamic>{};
+      LocalStorageService.instance.settingsBox.toMap().forEach((key, value) {
+        var k = key.toString();
+        if (_excludedSettingKeys.contains(k)) {
+          return;
+        }
+        settingMap[k] = value;
+      });
+      var dataSettingListMap = {'data': settingMap};
       final settingJsonFile = File(join(profile.path, _userSettingsJsonName));
       await settingJsonFile.writeAsString(jsonEncode(dataSettingListMap));
 
@@ -300,10 +352,67 @@ class RemoteSyncWebDAVController extends BaseController {
         } catch (e) {
           Log.e('同步哔哩哔哩账号失败：$e', StackTrace.current);
         }
+      } else if (file.name == _userDouyuAccountJsonName &&
+          isSyncDouyuAccount.value) {
+        try {
+          var cookie = (jsonData['cookie'] ?? '').toString();
+          if (cookie.isEmpty) {
+            Log.i('云端未备份斗鱼账号，跳过');
+          } else {
+            DouyuAccountService.instance.setCookie(cookie);
+            Log.i('已同步斗鱼账号');
+          }
+        } catch (e) {
+          Log.e('同步斗鱼账号失败：$e', StackTrace.current);
+        }
+      } else if (file.name == _userHuyaAccountJsonName &&
+          isSyncHuyaAccount.value) {
+        try {
+          var cookie = (jsonData['cookie'] ?? '').toString();
+          if (cookie.isEmpty) {
+            Log.i('云端未备份虎牙账号，跳过');
+          } else {
+            var service = HuyaAccountService.instance;
+            service.setCookie(cookie);
+            if (service.logined.value) {
+              await service.fetchNickname();
+            }
+            Log.i('已同步虎牙账号');
+          }
+        } catch (e) {
+          Log.e('同步虎牙账号失败：$e', StackTrace.current);
+        }
+      } else if (file.name == _userDouyinAccountJsonName &&
+          isSyncDouyinAccount.value) {
+        try {
+          var service = DouyinAccountService.instance;
+          var cookie = (jsonData['cookie'] ?? '').toString();
+          var loginCookie = (jsonData['loginCookie'] ?? '').toString();
+          if (cookie.isEmpty && loginCookie.isEmpty) {
+            Log.i('云端未备份抖音账号，跳过');
+          } else {
+            if (cookie.isNotEmpty) {
+              service.setCookie(cookie);
+            }
+            if (loginCookie.isNotEmpty) {
+              service.setLoginCookie(loginCookie);
+            }
+            Log.i('已同步抖音账号');
+          }
+        } catch (e) {
+          Log.e('同步抖音账号失败：$e', StackTrace.current);
+        }
       } else if (file.name == _userSettingsJsonName) {
         try {
-          await LocalStorageService.instance.settingsBox.clear();
-          LocalStorageService.instance.settingsBox.putAll(jsonData);
+          // 合并而不是清空：账号 Cookie / WebDAV 凭据 / 缓存一律跳过
+          var settings = Map<String, dynamic>.from(jsonData as Map);
+          for (var entry in settings.entries) {
+            if (_excludedSettingKeys.contains(entry.key)) {
+              continue;
+            }
+            await LocalStorageService.instance.settingsBox
+                .put(entry.key, entry.value);
+          }
           Log.i('已同步用户设置');
         } catch (e) {
           Log.e("同步用户设置失败：$e", StackTrace.current);
@@ -352,5 +461,17 @@ class RemoteSyncWebDAVController extends BaseController {
 
   void changeIsSyncBilibiliAccount() {
     isSyncBilibiliAccount.value = !isSyncBilibiliAccount.value;
+  }
+
+  void changeIsSyncDouyuAccount() {
+    isSyncDouyuAccount.value = !isSyncDouyuAccount.value;
+  }
+
+  void changeIsSyncHuyaAccount() {
+    isSyncHuyaAccount.value = !isSyncHuyaAccount.value;
+  }
+
+  void changeIsSyncDouyinAccount() {
+    isSyncDouyinAccount.value = !isSyncDouyinAccount.value;
   }
 }

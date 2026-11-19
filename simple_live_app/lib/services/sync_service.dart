@@ -15,6 +15,9 @@ import 'package:simple_live_app/models/db/follow_user_tag.dart';
 import 'package:simple_live_app/models/db/history.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/db_service.dart';
+import 'package:simple_live_app/services/douyin_account_service.dart';
+import 'package:simple_live_app/services/douyu_account_service.dart';
+import 'package:simple_live_app/services/huya_account_service.dart';
 import 'package:udp/udp.dart';
 import 'package:shelf/shelf.dart' as shelf;
 import 'package:shelf/shelf_io.dart' as shelf_io;
@@ -201,6 +204,9 @@ class SyncService extends GetxService {
       serverRouter.post('/sync/history', _syncHistoryReuqest);
       serverRouter.post('/sync/blocked_word', _syncBlockedWordReuqest);
       serverRouter.post('/sync/account/bilibili', _syncBiliAccountReuqest);
+      serverRouter.post('/sync/account/douyu', _syncDouyuAccountRequest);
+      serverRouter.post('/sync/account/huya', _syncHuyaAccountRequest);
+      serverRouter.post('/sync/account/douyin', _syncDouyinAccountRequest);
 
       var server = await shelf_io.serve(
         serverRouter,
@@ -403,6 +409,89 @@ class SyncService extends GetxService {
       BiliBiliAccountService.instance.setCookie(cookie);
       BiliBiliAccountService.instance.loadUserInfo();
       SmartDialog.showToast('已同步哔哩哔哩账号');
+      return toJsonResponse({
+        'status': true,
+        'message': 'success',
+      });
+    } catch (e) {
+      return toJsonResponse({
+        'status': false,
+        'message': e.toString(),
+      });
+    }
+  }
+
+  /// 同步斗鱼账号
+  Future<shelf.Response> _syncDouyuAccountRequest(shelf.Request request) async {
+    try {
+      var body = await request.readAsString();
+      var jsonBody = json.decode(body);
+      var cookie = (jsonBody['cookie'] ?? '').toString().trim();
+      if (cookie.isEmpty) {
+        return toJsonResponse({'status': false, 'message': '对方未登录斗鱼'});
+      }
+      Log.d('_syncDouyuAccountRequest: cookieLen=${cookie.length}');
+      DouyuAccountService.instance.setCookie(cookie);
+      SmartDialog.showToast('已同步斗鱼账号');
+      return toJsonResponse({
+        'status': true,
+        'message': 'success',
+      });
+    } catch (e) {
+      return toJsonResponse({
+        'status': false,
+        'message': e.toString(),
+      });
+    }
+  }
+
+  /// 同步虎牙账号
+  Future<shelf.Response> _syncHuyaAccountRequest(shelf.Request request) async {
+    try {
+      var body = await request.readAsString();
+      var jsonBody = json.decode(body);
+      var cookie = (jsonBody['cookie'] ?? '').toString().trim();
+      if (cookie.isEmpty) {
+        return toJsonResponse({'status': false, 'message': '对方未登录虎牙'});
+      }
+      Log.d('_syncHuyaAccountRequest: cookieLen=${cookie.length}');
+      HuyaAccountService.instance.setCookie(cookie);
+      // Cookie 是补全过的那份的话，昵称可以直接查出来；查不到也不影响登录态
+      if (HuyaAccountService.instance.logined.value) {
+        HuyaAccountService.instance.fetchNickname();
+      }
+      SmartDialog.showToast('已同步虎牙账号');
+      return toJsonResponse({
+        'status': true,
+        'message': 'success',
+      });
+    } catch (e) {
+      return toJsonResponse({
+        'status': false,
+        'message': e.toString(),
+      });
+    }
+  }
+
+  /// 同步抖音账号（自定义 ttwid + 登录 Cookie 分开传）
+  Future<shelf.Response> _syncDouyinAccountRequest(shelf.Request request) async {
+    try {
+      var body = await request.readAsString();
+      var jsonBody = json.decode(body);
+      var cookie = (jsonBody['cookie'] ?? '').toString().trim();
+      var loginCookie = (jsonBody['loginCookie'] ?? '').toString().trim();
+      if (cookie.isEmpty && loginCookie.isEmpty) {
+        return toJsonResponse({'status': false, 'message': '对方未登录抖音'});
+      }
+      Log.d('_syncDouyinAccountRequest: cookieLen=${cookie.length} '
+          'loginCookieLen=${loginCookie.length}');
+      if (cookie.isNotEmpty) {
+        DouyinAccountService.instance.setCookie(cookie);
+      }
+      if (loginCookie.isNotEmpty) {
+        DouyinAccountService.instance.setLoginCookie(loginCookie);
+      }
+      SmartDialog.showToast('已同步抖音账号');
       return toJsonResponse({
         'status': true,
         'message': 'success',

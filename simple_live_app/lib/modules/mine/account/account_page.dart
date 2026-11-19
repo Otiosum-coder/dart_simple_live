@@ -34,9 +34,7 @@ class AccountPage extends GetView<AccountController> {
               ),
               title: const Text("哔哩哔哩"),
               subtitle: Text(BiliBiliAccountService.instance.name.value),
-              trailing: BiliBiliAccountService.instance.logined.value
-                  ? const Icon(Icons.logout)
-                  : const Icon(Icons.chevron_right),
+              trailing: const Icon(Icons.chevron_right),
               onTap: controller.bilibiliTap,
             ),
           ),
@@ -51,9 +49,7 @@ class AccountPage extends GetView<AccountController> {
               subtitle: Text(DouyuAccountService.instance.logined.value
                   ? DouyuAccountService.instance.name.value
                   : "未登录（原画/蓝光4M 受限）"),
-              trailing: DouyuAccountService.instance.logined.value
-                  ? const Icon(Icons.logout)
-                  : const Icon(Icons.chevron_right),
+              trailing: const Icon(Icons.chevron_right),
               onTap: controller.douyuTap,
             ),
           ),
@@ -68,9 +64,7 @@ class AccountPage extends GetView<AccountController> {
               subtitle: Text(HuyaAccountService.instance.logined.value
                   ? HuyaAccountService.instance.name.value
                   : "未登录（发送弹幕需要登录）"),
-              trailing: HuyaAccountService.instance.logined.value
-                  ? const Icon(Icons.logout)
-                  : const Icon(Icons.chevron_right),
+              trailing: const Icon(Icons.chevron_right),
               onTap: controller.huyaTap,
             ),
           ),
@@ -84,12 +78,8 @@ class AccountPage extends GetView<AccountController> {
               title: const Text("抖音直播"),
               subtitle: Text(DouyinAccountService.instance.logined.value
                   ? DouyinAccountService.instance.name.value
-                  : DouyinAccountService.instance.hasCookie.value
-                      ? "未登录（已自定义 ttwid）"
-                      : "未登录（使用默认 ttwid）"),
-              trailing: DouyinAccountService.instance.logined.value
-                  ? const Icon(Icons.logout)
-                  : const Icon(Icons.chevron_right),
+                  : "未登录（使用默认 ttwid）"),
+              trailing: const Icon(Icons.chevron_right),
               onTap: controller.douyinTap,
             ),
           ),

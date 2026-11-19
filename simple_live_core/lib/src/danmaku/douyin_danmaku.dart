@@ -59,7 +59,7 @@ class DouyinDanmaku implements LiveDanmaku {
         "app_name": "douyin_web",
         "version_code": "180800",
         "webcast_sdk_version": "1.3.0",
-        "update_version_code": "1.3.0",
+        "update_version_code": "180800",
         "compress": "gzip",
         // "internal_ext":
         //     "internal_src:dim|wss_push_room_id:${danmakuArgs.roomId}|wss_push_did:${danmakuArgs.userId}|dim_log_id:20230626152702E8F63662383A350588E1|fetch_time:1687764422114|seq:1|wss_info:0-1687764422114-0-0|wrds_kvs:WebcastRoomRankMessage-1687764036509597990_InputPanelComponentSyncData-1687736682345173033_WebcastRoomStatsMessage-1687764414427812578",
@@ -89,7 +89,8 @@ class DouyinDanmaku implements LiveDanmaku {
         "tz_name": "Asia/Shanghai",
         "identity": "audience",
         "room_id": danmakuArgs.roomId,
-        "heartbeatDuration": "0",
+        // 与网页/官方客户端一致：由服务端按 10 秒下发心跳周期
+        "heartbeatDuration": "10",
         //"signature": "00000000"
       },
     );
@@ -139,12 +140,24 @@ class DouyinDanmaku implements LiveDanmaku {
   }
 
   void decodeMessage(args) {
-    // CoreLog.i(args.toString());
+    try {
+      _decodePushFrame(args);
+    } catch (e) {
+      // 单帧解析失败不能影响整条连接（例如收到非 gzip 的业务帧）
+      CoreLog.error("抖音弹幕帧解析失败: $e");
+    }
+  }
 
+  void _decodePushFrame(args) {
     var wssPackage = PushFrame.fromBuffer(args);
 
     var logId = wssPackage.logId;
-    var decompressed = gzip.decode(wssPackage.payload);
+    List<int> decompressed;
+    try {
+      decompressed = gzip.decode(wssPackage.payload);
+    } catch (e) {
+      decompressed = wssPackage.payload;
+    }
     var payloadPackage = Response.fromBuffer(decompressed);
     if (payloadPackage.needAck) {
       sendAck(logId, payloadPackage.internalExt);
@@ -298,15 +311,15 @@ class DouyinDanmaku implements LiveDanmaku {
     webScoketUtils?.sendMessage(obj.writeToBuffer());
   }
 
-  /// 抖音发弹幕：经过抓包与多轮验证，聊天接口会做浏览器环境校验
-  /// （同样的 Cookie + a_bogus + 完整请求头，浏览器能发、纯 HTTP 请求返回
-  /// 20003 User doesn't login）。纯 Dart 无法稳定通过，暂不提供发送能力。
+  /// 抖音发送弹幕已禁用：接口风控严格、登录态容易被判风险，
+  /// 统一返回 false，输入框会提示「该平台暂不支持发送弹幕」。
   @override
   bool get canSendDanmaku => false;
 
+  /// 发送已禁用（风控严格），保留实现以满足接口，正常不会被调用。
   @override
   Future<String?> sendDanmaku(String message) async {
-    return "抖音暂不支持发送弹幕（平台对非浏览器请求有风控校验）";
+    return "该平台暂不支持发送弹幕";
   }
 
   @override

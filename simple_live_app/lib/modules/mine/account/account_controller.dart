@@ -6,22 +6,82 @@ import 'package:get/get.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
-import 'package:simple_live_app/services/douyin_account_service.dart';
-import 'package:simple_live_app/modules/mine/account/douyu/douyu_login_sheet.dart';
 import 'package:simple_live_app/modules/mine/account/douyin/douyin_login_sheet.dart';
+import 'package:simple_live_app/modules/mine/account/douyu/douyu_login_sheet.dart';
 import 'package:simple_live_app/modules/mine/account/huya/huya_login_sheet.dart';
+import 'package:simple_live_app/services/douyin_account_service.dart';
 import 'package:simple_live_app/services/douyu_account_service.dart';
 import 'package:simple_live_app/services/huya_account_service.dart';
 
 class AccountController extends GetxController {
+  /// 已登录平台点击后的操作面板：复制 Cookie / 重新登录 / 退出登录
+  void showAccountActions({
+    required String siteName,
+    required String cookie,
+    required VoidCallback onRelogin,
+    required VoidCallback onLogout,
+  }) {
+    var value = cookie.trim();
+    Utils.showBottomSheet(
+      title: siteName,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.copy_all),
+            title: const Text("复制 Cookie"),
+            subtitle: Text(
+              value.isEmpty
+                  ? "本机没有保存 Cookie"
+                  : "复制后在另一台设备的「Cookie登录」里粘贴",
+            ),
+            enabled: value.isNotEmpty,
+            trailing: const Icon(Icons.chevron_right),
+            onTap: value.isEmpty
+                ? null
+                : () {
+                    Get.back();
+                    Utils.copyToClipboard(value);
+                    SmartDialog.showToast("已复制，去另一台设备「Cookie登录」粘贴");
+                  },
+          ),
+          ListTile(
+            leading: const Icon(Icons.swap_horiz),
+            title: const Text("重新登录"),
+            subtitle: const Text("换一个账号或刷新登录凭证"),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Get.back();
+              onRelogin();
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.logout),
+            title: const Text("退出登录"),
+            subtitle: const Text("只清本机登录态，不会去服务端注销"),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Get.back();
+              onLogout();
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   void bilibiliTap() async {
     if (BiliBiliAccountService.instance.logined.value) {
-      var result = await Utils.showAlertDialog("确定要退出哔哩哔哩账号吗？", title: "退出登录");
-      if (result) {
-        BiliBiliAccountService.instance.logout();
-      }
+      showAccountActions(
+        siteName: "哔哩哔哩账号",
+        cookie: BiliBiliAccountService.instance.cookie,
+        onRelogin: bilibiliLogin,
+        onLogout: () {
+          BiliBiliAccountService.instance.logout();
+          SmartDialog.showToast("已退出哔哩哔哩账号");
+        },
+      );
     } else {
-      //AppNavigator.toBiliBiliLogin();
       bilibiliLogin();
     }
   }
@@ -87,11 +147,15 @@ class AccountController extends GetxController {
 
   void douyuTap() async {
     if (DouyuAccountService.instance.logined.value) {
-      var result = await Utils.showAlertDialog("确定要退出斗鱼账号吗？", title: "退出登录");
-      if (result) {
-        DouyuAccountService.instance.logout();
-        SmartDialog.showToast("已退出斗鱼账号");
-      }
+      showAccountActions(
+        siteName: "斗鱼账号",
+        cookie: DouyuAccountService.instance.cookie,
+        onRelogin: douyuLogin,
+        onLogout: () {
+          DouyuAccountService.instance.logout();
+          SmartDialog.showToast("已退出斗鱼账号");
+        },
+      );
     } else {
       douyuLogin();
     }
@@ -102,30 +166,17 @@ class AccountController extends GetxController {
     showDouyuLoginSheet();
   }
 
-  void douyinTap() async {
-    if (DouyinAccountService.instance.logined.value) {
-      var result = await Utils.showAlertDialog("确定要退出抖音账号吗？", title: "退出登录");
-      if (result) {
-        DouyinAccountService.instance.logout();
-        SmartDialog.showToast("已退出抖音账号");
-      }
-    } else {
-      douyinLogin();
-    }
-  }
-
-  /// 登录方式选择（扫码 / Web / 自定义 ttwid）
-  void douyinLogin() {
-    showDouyinLoginSheet();
-  }
-
   void huyaTap() async {
     if (HuyaAccountService.instance.logined.value) {
-      var result = await Utils.showAlertDialog("确定要退出虎牙账号吗？", title: "退出登录");
-      if (result) {
-        HuyaAccountService.instance.logout();
-        SmartDialog.showToast("已退出虎牙账号");
-      }
+      showAccountActions(
+        siteName: "虎牙账号",
+        cookie: HuyaAccountService.instance.cookie,
+        onRelogin: huyaLogin,
+        onLogout: () {
+          HuyaAccountService.instance.logout();
+          SmartDialog.showToast("已退出虎牙账号");
+        },
+      );
     } else {
       huyaLogin();
     }
@@ -134,5 +185,26 @@ class AccountController extends GetxController {
   /// 登录方式选择（扫码 / Web / Cookie）
   void huyaLogin() {
     showHuyaLoginSheet();
+  }
+
+  void douyinTap() async {
+    if (DouyinAccountService.instance.logined.value) {
+      showAccountActions(
+        siteName: "抖音账号",
+        cookie: DouyinAccountService.instance.copyableCookie,
+        onRelogin: douyinLogin,
+        onLogout: () {
+          DouyinAccountService.instance.logout();
+          SmartDialog.showToast("已退出抖音账号");
+        },
+      );
+    } else {
+      douyinLogin();
+    }
+  }
+
+  /// 抖音只保留 Cookie 登录与 ttwid 配置（扫码 / 手机号 / 网页登录已移除）
+  void douyinLogin() {
+    showDouyinLoginSheet();
   }
 }

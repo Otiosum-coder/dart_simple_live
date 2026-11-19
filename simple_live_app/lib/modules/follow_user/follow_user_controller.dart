@@ -201,7 +201,13 @@ class FollowUserController extends BasePageController<FollowUser> {
       }
     }
     await DBService.instance.followBox.delete(item.id);
-    refreshData();
+    // 只从内存里摘掉这一条再重排，不重新拉全部主播的直播状态。
+    // 以前这里走 refreshData()，会触发 FollowService.loadData() 的
+    // startUpdateStatus()，把整个关注列表的直播状态重新请求一遍。
+    FollowService.instance.followList.removeWhere((e) => e.id == item.id);
+    // filterData 内部会重排并通知列表刷新（updatedListStream）
+    FollowService.instance.filterData();
+    updateTagList();
   }
 
   void updateItem(FollowUser item){

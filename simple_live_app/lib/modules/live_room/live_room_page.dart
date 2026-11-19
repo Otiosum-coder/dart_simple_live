@@ -759,9 +759,12 @@ class LiveRoomPage extends GetView<LiveRoomController> {
   }
 
   Widget buildMessageArea() {
+    // 斗鱼的高能弹幕（付费留言 / 语音弹幕）也走 SC 展示面
+    final showSuperChat = controller.site.id == Constant.kBiliBili ||
+        controller.site.id == Constant.kDouyu;
     return Expanded(
       child: DefaultTabController(
-        length: controller.site.id == Constant.kBiliBili ? 4 : 3,
+        length: showSuperChat ? 4 : 3,
         child: Column(
           children: [
             TabBar(
@@ -772,7 +775,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                 const Tab(
                   text: "聊天",
                 ),
-                if (controller.site.id == Constant.kBiliBili)
+                if (showSuperChat)
                   Tab(
                     child: Obx(
                       () => Text(
@@ -794,7 +797,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
               child: TabBarView(
                 children: [
                   buildChatTab(),
-                  if (controller.site.id == Constant.kBiliBili)
+                  if (showSuperChat)
                     buildSuperChats(),
                   buildFollowList(),
                   buildSettings(),
@@ -956,7 +959,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
       );
     }
 
-    return Obx(
+    final item = Obx(
       () => AppSettingsController.instance.chatBubbleStyle.value
           ? Row(
               mainAxisAlignment: MainAxisAlignment.start,
@@ -1001,6 +1004,145 @@ class LiveRoomPage extends GetView<LiveRoomController> {
               ),
             ),
     );
+
+    // 系统消息不参与复制
+    if (message.message.trim().isEmpty) {
+      return item;
+    }
+    return wrapCopyableMessage(message, item);
+  }
+
+  /// 是否桌面端（鼠标交互）
+  bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+
+  /// 把一条聊天消息包成「可复制」条目
+  ///
+  /// 手机端：点击弹出底部小卡片；桌面端：左键/右键在鼠标位置弹出菜单。
+  Widget wrapCopyableMessage(LiveMessage message, Widget child) {
+    if (_isDesktop) {
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapUp: (details) {
+          showDanmakuCopyMenu(message, details.globalPosition);
+        },
+        onSecondaryTapUp: (details) {
+          showDanmakuCopyMenu(message, details.globalPosition);
+        },
+        child: child,
+      );
+    }
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => showDanmakuCopySheet(message),
+      child: child,
+    );
+  }
+
+  /// 复制弹幕要写入剪贴板的文本
+  String _copyContent(LiveMessage message) => message.message.trim();
+
+  /// 复制「昵称：内容」
+  String _copyContentWithName(LiveMessage message) {
+    return "${message.userName}：${message.message}".trim();
+  }
+
+  /// 手机端：底部卡片（带预览）
+  Future<void> showDanmakuCopySheet(LiveMessage message) async {
+    final textSize = AppSettingsController.instance.chatTextSize.value;
+    await showModalBottomSheet(
+      context: Get.context!,
+      backgroundColor: Get.isDarkMode ? const Color(0xFF1F1F1F) : Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
+              child: Text(
+                "复制弹幕",
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Get.isDarkMode ? Colors.grey : Colors.grey.shade600,
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text.rich(
+                TextSpan(
+                  text: "${message.userName}：",
+                  style: TextStyle(
+                    color: Colors.grey,
+                    fontSize: textSize,
+                  ),
+                  children: buildMessageSpans(message),
+                ),
+                maxLines: 4,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            AppStyle.vGap12,
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.copy_all_outlined),
+              title: const Text("复制弹幕"),
+              onTap: () {
+                Utils.copyToClipboard(_copyContent(message));
+                Navigator.of(ctx).pop();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.copy_rounded),
+              title: const Text("复制「昵称：内容」"),
+              onTap: () {
+                Utils.copyToClipboard(_copyContentWithName(message));
+                Navigator.of(ctx).pop();
+              },
+            ),
+            AppStyle.vGap12,
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 桌面端：鼠标位置弹出菜单
+  Future<void> showDanmakuCopyMenu(
+    LiveMessage message,
+    Offset globalPosition,
+  ) async {
+    final overlay = Overlay.of(Get.context!).context.findRenderObject();
+    if (overlay is! RenderBox) {
+      return;
+    }
+    final selected = await showMenu<String>(
+      context: Get.context!,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 1, 1),
+        Offset.zero & overlay.size,
+      ),
+      items: const [
+        PopupMenuItem<String>(
+          value: "content",
+          height: 40,
+          child: Text("复制弹幕", style: TextStyle(fontSize: 13)),
+        ),
+        PopupMenuItem<String>(
+          value: "full",
+          height: 40,
+          child: Text("复制「昵称：内容」", style: TextStyle(fontSize: 13)),
+        ),
+      ],
+    );
+    if (selected == "content") {
+      Utils.copyToClipboard(_copyContent(message));
+    } else if (selected == "full") {
+      Utils.copyToClipboard(_copyContentWithName(message));
+    }
   }
 
   Widget buildSuperChats() {
@@ -1132,6 +1274,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
             ],
           ),
         ),
+
       ],
     );
   }
@@ -1191,22 +1334,19 @@ class LiveRoomPage extends GetView<LiveRoomController> {
 
   /// 右上角「更多」菜单
   ///
-  /// 只保留"唯一入口"的功能：截图在播放器控制条上、刷新在底部操作栏、
-  /// 画面尺寸 / 定时关闭在直播间「设置」页签、复制链接在系统分享面板里都有，
-  /// 这里不再重复放 —— 一级菜单过长时顶部会被顶出屏幕。
+  /// 内容放进一个固定高度的滚动区（像「弹幕设置」面板那样），
+  /// 只显示一部分、其余向上滑动查看，不再把十几项一次性摊满整屏。
   void showMore() {
-    // 给弹窗一个高度上限：内容再长也在屏幕内滚动，顶部不会跑出屏幕
-    var maxHeight = MediaQuery.of(Get.context!).size.height * 0.85;
+    var size = MediaQuery.of(Get.context!).size;
+    // 滚动区高度：约半屏，剩下的靠滑动
+    var listHeight = size.height * 0.5;
     showModalBottomSheet(
       context: Get.context!,
-      constraints: BoxConstraints(maxWidth: 600, maxHeight: maxHeight),
+      constraints: BoxConstraints(maxWidth: 600, maxHeight: listHeight + 24),
       isScrollControlled: true,
-      builder: (_) => Container(
-        padding: EdgeInsets.only(
-          bottom: AppStyle.bottomBarHeight,
-        ),
+      builder: (_) => SizedBox(
+        height: listHeight,
         child: ListView(
-          shrinkWrap: true,
           padding: EdgeInsets.zero,
           children: [
             // 新布局下底部功能行取消，刷新/分享收到这里（只在开启发送弹幕时出现）
@@ -1219,7 +1359,6 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                   controller.refreshRoom();
                 },
               ),
-              const Divider(height: 1),
             ],
             // 后台播放：必须跑前台服务，代价是通知栏有一条低重要度通知
             Obx(
@@ -1254,7 +1393,18 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                 },
               ),
             ),
-            const Divider(height: 1),
+            // 窗口态没有播放器顶栏图标，观看记录入口收在这里（与切换清晰度同组）
+            ListTile(
+              leading: const Icon(Remix.history_line),
+              title: const Text("观看记录"),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Get.back();
+                Future.delayed(const Duration(milliseconds: 250), () {
+                  showRoomHistory(controller);
+                });
+              },
+            ),
             ListTile(
               leading: const Icon(Icons.play_circle_outline),
               trailing: const Icon(Icons.chevron_right),
@@ -1313,6 +1463,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                 controller.showDebugInfo();
               },
             ),
+            SizedBox(height: AppStyle.bottomBarHeight),
           ],
         ),
       ),

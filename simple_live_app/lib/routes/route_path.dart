@@ -66,6 +66,7 @@ class RoutePath {
   /// 虎牙 二维码登录
   static const kHuyaQRLogin = "/settings/account/huya/qr_login";
 
+
   /// 数据同步
   static const kLocalSync = "/local_sync";
 
@@ -77,6 +78,9 @@ class RoutePath {
 
   /// 同步设备
   static const kLocalSyncDevice = "/sync/device";
+
+  /// 同步设备-账号
+  static const kSyncAccount = "/sync/device/account";
 
   /// 远程同步-房间
   static const kRemoteSyncRoom = "/remote_sync/room";

@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 import 'package:simple_live_core/src/common/web_socket_util.dart';
+import 'package:simple_live_core/src/danmaku/huya_emoticon.dart';
 import 'package:simple_live_core/src/model/tars/huya_danmaku.dart';
 import 'package:tars_dart/tars/codec/tars_input_stream.dart';
 import 'package:tars_dart/tars/codec/tars_output_stream.dart';
@@ -629,6 +630,8 @@ class HuyaDanmaku implements LiveDanmaku {
 
           var color = messageNotice.bulletFormat.fontColor;
 
+          // 正文里的 [大笑] / {/dx} 之类标记换成图片表情
+          final spans = HuyaEmoticon.parseSpans(content);
           onMessage?.call(
             LiveMessage(
               type: LiveMessageType.chat,
@@ -637,6 +640,13 @@ class HuyaDanmaku implements LiveDanmaku {
                   : LiveMessageColor.numberToColor(color),
               message: content,
               userName: uname,
+              spans: spans,
+              imageUrls: spans
+                  ?.where((e) => e.isImage)
+                  .map((e) => e.imageUrl!)
+                  .toList(),
+              isRoomEmoji:
+                  spans != null && HuyaEmoticon.isOnlyEmoticon(spans),
             ),
           );
         } else if (wSPushMessage.uri == 8006) {

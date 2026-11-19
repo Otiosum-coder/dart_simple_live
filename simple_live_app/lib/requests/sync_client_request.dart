@@ -105,13 +105,35 @@ class SyncClientRequest {
   }
 
   Future<bool> syncBiliAccount(SyncClinet client, String cookie) async {
-    var url = "http://${client.address}:${client.port}/sync/account/bilibili";
-    var data = await HttpClient.instance.postJson(
-      url,
-      data: {
-        "cookie": cookie,
-      },
-    );
+    return _postAccount(client, "bilibili", {"cookie": cookie});
+  }
+
+  Future<bool> syncDouyuAccount(SyncClinet client, String cookie) async {
+    return _postAccount(client, "douyu", {"cookie": cookie});
+  }
+
+  Future<bool> syncHuyaAccount(SyncClinet client, String cookie) async {
+    return _postAccount(client, "huya", {"cookie": cookie});
+  }
+
+  Future<bool> syncDouyinAccount(
+    SyncClinet client, {
+    String cookie = "",
+    String loginCookie = "",
+  }) async {
+    return _postAccount(client, "douyin", {
+      "cookie": cookie,
+      "loginCookie": loginCookie,
+    });
+  }
+
+  Future<bool> _postAccount(
+    SyncClinet client,
+    String site,
+    Map<String, dynamic> body,
+  ) async {
+    var url = "http://${client.address}:${client.port}/sync/account/$site";
+    var data = await HttpClient.instance.postJson(url, data: body);
 
     if (data["status"]) {
       return true;

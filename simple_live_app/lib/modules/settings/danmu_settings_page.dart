@@ -32,7 +32,7 @@ class DanmuSettingsView extends GetView<AppSettingsController> {
   final Function()? onTapDanmuShield;
   final DanmakuController? danmakuController;
 
-  /// 是否显示「屏蔽图片表情」开关（只对 B站 有意义，其他平台隐藏）
+  /// 是否显示「屏蔽图片表情」开关（哔哩哔哩/斗鱼/虎牙有图片表情，其他平台隐藏）
   final bool showRoomEmojiBlock;
   const DanmuSettingsView({
     this.onTapDanmuShield,
@@ -68,7 +68,7 @@ class DanmuSettingsView extends GetView<AppSettingsController> {
                 Obx(
                   () => SettingsSwitch(
                     title: "屏蔽图片表情",
-                    subtitle: "仅哔哩哔哩生效：屏蔽直播间专属表情包，全站表情不受影响",
+                    subtitle: "屏蔽整条只有图片表情的弹幕（哔哩哔哩专属表情、斗鱼钻粉表情、虎牙表情），含文字的弹幕不受影响",
                     value: controller.danmuBlockRoomEmoji.value,
                     onChanged: (e) {
                       controller.setDanmuBlockRoomEmoji(e);

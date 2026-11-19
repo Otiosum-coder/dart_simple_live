@@ -3,7 +3,6 @@ import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:remixicon/remixicon.dart';
 import 'package:simple_live_app/app/app_style.dart';
-import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/widgets/settings/settings_card.dart';
 
@@ -25,7 +24,7 @@ class SyncPage extends StatelessWidget {
                   return;
                 }
                 if (result.length == 5) {
-                  Get.toNamed(RoutePath.kRemoteSyncRoom, arguments: result);
+                  SmartDialog.showToast("远程同步房间暂不可用，请改用局域网同步或 WebDAV");
                 } else {
                   Get.toNamed(RoutePath.kLocalSync, arguments: result);
                 }
@@ -50,41 +49,26 @@ class SyncPage extends StatelessWidget {
             child: Column(
               children: [
                 ListTile(
+                  textColor: Colors.grey,
+                  iconColor: Colors.grey,
                   title: const Text("创建房间"),
                   leading: const Icon(Remix.home_wifi_line),
-                  subtitle: const Text("其他设备可以通过房间号加入"),
-                  trailing: const Icon(Icons.chevron_right),
+                  subtitle: const Text("服务端不可用，请改用局域网同步或 WebDAV"),
+                  trailing: const Icon(Icons.block),
                   onTap: () {
-                    Get.toNamed(RoutePath.kRemoteSyncRoom);
+                    SmartDialog.showToast("远程同步服务端不可用，请改用局域网同步或 WebDAV");
                   },
                 ),
                 AppStyle.divider,
                 ListTile(
+                  textColor: Colors.grey,
+                  iconColor: Colors.grey,
                   title: const Text("加入房间"),
                   leading: const Icon(Remix.add_circle_line),
-                  subtitle: const Text("加入其他设备创建的房间"),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () async {
-                    var input = await Utils.showEditTextDialog(
-                      "",
-                      title: "加入房间",
-                      hintText: "请输入房间号,不区分大小写",
-                      validate: (text) {
-                        if (text.isEmpty) {
-                          SmartDialog.showToast("房间号不能为空");
-                          return false;
-                        }
-                        if (text.length != 5) {
-                          SmartDialog.showToast("请输入5位房间号");
-                          return false;
-                        }
-                        return true;
-                      },
-                    );
-                    if (input != null && input.isNotEmpty) {
-                      Get.toNamed(RoutePath.kRemoteSyncRoom,
-                          arguments: input.toUpperCase());
-                    }
+                  subtitle: const Text("服务端不可用，请改用局域网同步或 WebDAV"),
+                  trailing: const Icon(Icons.block),
+                  onTap: () {
+                    SmartDialog.showToast("远程同步服务端不可用，请改用局域网同步或 WebDAV");
                   },
                 ),
                 AppStyle.divider,
