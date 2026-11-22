@@ -19,14 +19,17 @@ class HuyaSite implements LiveSite {
   static const String HYSDK_UA =
       "HYSDK(Windows, 30000002)_APP(pc_exe&7060000&official)_SDK(trans&2.32.3.5646)";
 
-  static Map<String, String> requestHeaders =  {
-      'Origin': baseUrl,
-      'Referer': baseUrl,
-      'User-Agent': HYSDK_UA,
+  static Map<String, String> requestHeaders = {
+    'Origin': baseUrl,
+    'Referer': baseUrl,
+    'User-Agent': HYSDK_UA,
   };
 
-  final BaseTarsHttp tupClient =
-  BaseTarsHttp("http://wup.huya.com", "liveui", headers: requestHeaders);
+  final BaseTarsHttp tupClient = BaseTarsHttp(
+    "http://wup.huya.com",
+    "liveui",
+    headers: requestHeaders,
+  );
 
   String? playUserAgent;
 
@@ -38,9 +41,9 @@ class HuyaSite implements LiveSite {
 
   /// 带登录态的请求头
   Map<String, dynamic> get requestHeadersWithCookie => {
-        "user-agent": kUserAgent,
-        if (cookie.isNotEmpty) "cookie": cookie,
-      };
+    "user-agent": kUserAgent,
+    if (cookie.isNotEmpty) "cookie": cookie,
+  };
 
   @override
   String id = "huya";
@@ -70,9 +73,7 @@ class HuyaSite implements LiveSite {
   Future<List<LiveSubCategory>> getSubCategores(String id) async {
     var result = await HttpClient.instance.getJson(
       "https://live.cdn.huya.com/liveconfig/game/bussLive",
-      queryParameters: {
-        "bussType": id,
-      },
+      queryParameters: {"bussType": id},
     );
 
     List<LiveSubCategory> subs = [];
@@ -102,8 +103,10 @@ class HuyaSite implements LiveSite {
   }
 
   @override
-  Future<LiveCategoryResult> getCategoryRooms(LiveSubCategory category,
-      {int page = 1}) async {
+  Future<LiveCategoryResult> getCategoryRooms(
+    LiveSubCategory category, {
+    int page = 1,
+  }) async {
     var resultText = await HttpClient.instance.getJson(
       "https://www.huya.com/cache.php",
       queryParameters: {
@@ -111,7 +114,7 @@ class HuyaSite implements LiveSite {
         "do": "getLiveListByPage",
         "tagAll": 0,
         "gameId": category.id,
-        "page": page
+        "page": page,
       },
     );
     var result = json.decode(resultText);
@@ -140,16 +143,14 @@ class HuyaSite implements LiveSite {
   }
 
   @override
-  Future<List<LivePlayQuality>> getPlayQualites(
-      {required LiveRoomDetail detail}) {
+  Future<List<LivePlayQuality>> getPlayQualites({
+    required LiveRoomDetail detail,
+  }) {
     List<LivePlayQuality> qualities = <LivePlayQuality>[];
     var urlData = detail.data as HuyaUrlDataModel;
     if (urlData.bitRates.isEmpty) {
       urlData.bitRates = [
-        HuyaBitRateModel(
-          name: "原画",
-          bitRate: 0,
-        ),
+        HuyaBitRateModel(name: "原画", bitRate: 0),
         HuyaBitRateModel(name: "高清", bitRate: 2000),
       ];
     }
@@ -189,13 +190,12 @@ class HuyaSite implements LiveSite {
       //   urls.add(src);
       // }
 
-      qualities.add(LivePlayQuality(
-        data: {
-          "urls": urlData.lines,
-          "bitRate": item.bitRate,
-        },
-        quality: item.name,
-      ));
+      qualities.add(
+        LivePlayQuality(
+          data: {"urls": urlData.lines, "bitRate": item.bitRate},
+          quality: item.name,
+        ),
+      );
     }
 
     return Future.value(qualities);
@@ -216,9 +216,7 @@ class HuyaSite implements LiveSite {
       try {
         var result = await HttpClient.instance.getJson(
           configUrl,
-          queryParameters: {
-            "ts": DateTime.now().millisecondsSinceEpoch,
-          },
+          queryParameters: {"ts": DateTime.now().millisecondsSinceEpoch},
         );
         playUserAgent = json.decode(result)['huya']['user_agent'];
         if (playUserAgent != null && playUserAgent!.isNotEmpty) {
@@ -232,9 +230,10 @@ class HuyaSite implements LiveSite {
   }
 
   @override
-  Future<LivePlayUrl> getPlayUrls(
-      {required LiveRoomDetail detail,
-      required LivePlayQuality quality}) async {
+  Future<LivePlayUrl> getPlayUrls({
+    required LiveRoomDetail detail,
+    required LivePlayQuality quality,
+  }) async {
     var ls = <String>[];
     for (var element in quality.data["urls"]) {
       var line = element as HuyaLineModel;
@@ -243,10 +242,7 @@ class HuyaSite implements LiveSite {
     }
     // 最新UA需要额外验证，此方法暂时弃用
     // var ua = await getHuYaUA();
-    return LivePlayUrl(
-      urls: ls,
-      headers: {"user-agent": HYSDK_UA},
-    );
+    return LivePlayUrl(urls: ls, headers: {"user-agent": HYSDK_UA});
   }
 
   Future<String> getPlayUrl(HuyaLineModel line, int bitRate) async {
@@ -276,11 +272,13 @@ class HuyaSite implements LiveSite {
     var clacStartTime = DateTime.now().millisecondsSinceEpoch;
 
     CoreLog.i(
-        "using $presenterUid | ctype-{$ctype} | platformId - {$platformId} | isWap - {$isWap} | $clacStartTime");
+      "using $presenterUid | ctype-{$ctype} | platformId - {$platformId} | isWap - {$isWap} | $clacStartTime",
+    );
 
     var seqId = presenterUid + clacStartTime;
-    final secretHash =
-        md5.convert(utf8.encode('$seqId|$ctype|$platformId')).toString();
+    final secretHash = md5
+        .convert(utf8.encode('$seqId|$ctype|$platformId'))
+        .toString();
 
     final convertUid = rotl64(presenterUid);
     final calcUid = isWap ? presenterUid : convertUid;
@@ -293,8 +291,8 @@ class HuyaSite implements LiveSite {
     final wsSecret = md5.convert(utf8.encode(secretStr)).toString();
 
     final rnd = Random();
-    final ct =
-        ((int.parse(wsTime, radix: 16) + rnd.nextDouble()) * 1000).toInt();
+    final ct = ((int.parse(wsTime, radix: 16) + rnd.nextDouble()) * 1000)
+        .toInt();
     final uuid = (((ct % 1e10) + rnd.nextDouble()) * 1e3 % 0xffffffff)
         .toInt()
         .toString();
@@ -309,10 +307,7 @@ class HuyaSite implements LiveSite {
       't': platformId,
     };
     if (isWap) {
-      antiCodeRes.addAll({
-        'uid': presenterUid,
-        'uuid': uuid,
-      });
+      antiCodeRes.addAll({'uid': presenterUid, 'uuid': uuid});
     } else {
       antiCodeRes['u'] = convertUid;
     }
@@ -340,7 +335,7 @@ class HuyaSite implements LiveSite {
         "m": "LiveList",
         "do": "getLiveListByPage",
         "tagAll": 0,
-        "page": page
+        "page": page,
       },
     );
     var result = json.decode(resultText);
@@ -373,7 +368,8 @@ class HuyaSite implements LiveSite {
     var roomInfo = await _getRoomInfo(roomId);
     // 失效/异常房间的 roomInfo 可能为空，这里兜底避免崩溃
     var roomData = roomInfo["roomInfo"];
-    var tLiveInfo = (roomData is Map ? roomData["tLiveInfo"] : null) ?? const {};
+    var tLiveInfo =
+        (roomData is Map ? roomData["tLiveInfo"] : null) ?? const {};
     var tProfileInfo =
         (roomData is Map ? roomData["tProfileInfo"] : null) ?? const {};
 
@@ -389,15 +385,17 @@ class HuyaSite implements LiveSite {
     var streamValue = vStreamInfo is Map ? vStreamInfo["value"] : null;
     for (var item in (streamValue is List ? streamValue : const [])) {
       if ((item["sFlvUrl"]?.toString() ?? "").isNotEmpty) {
-        huyaLines.add(HuyaLineModel(
-          line: item["sFlvUrl"].toString(),
-          lineType: HuyaLineType.flv,
-          flvAntiCode: item["sFlvAntiCode"].toString(),
-          hlsAntiCode: item["sHlsAntiCode"].toString(),
-          streamName: item["sStreamName"].toString(),
-          cdnType: item["sCdnType"].toString(),
-          presenterUid: roomInfo["topSid"]??0,
-        ));
+        huyaLines.add(
+          HuyaLineModel(
+            line: item["sFlvUrl"].toString(),
+            lineType: HuyaLineType.flv,
+            flvAntiCode: item["sFlvAntiCode"].toString(),
+            hlsAntiCode: item["sHlsAntiCode"].toString(),
+            streamName: item["sStreamName"].toString(),
+            cdnType: item["sCdnType"].toString(),
+            presenterUid: roomInfo["topSid"] ?? 0,
+          ),
+        );
       }
     }
 
@@ -409,10 +407,9 @@ class HuyaSite implements LiveSite {
       if (name.contains("HDR")) {
         continue;
       }
-      huyaBiterates.add(HuyaBitRateModel(
-        bitRate: item["iBitRate"],
-        name: name,
-      ));
+      huyaBiterates.add(
+        HuyaBitRateModel(bitRate: item["iBitRate"], name: name),
+      );
     }
 
     var topSid = roomInfo["topSid"];
@@ -424,10 +421,16 @@ class HuyaSite implements LiveSite {
     if (profileRoomId.isEmpty || profileRoomId == "0") {
       profileRoomId = roomId;
     }
-    // 房间状态，异常房间的 roomInfo 可能为空，这里做空值保护
-    var isLive = roomData is Map && roomData["eLiveStatus"] == 2;
     // 页面里没有 roomInfo = 房间不存在（旧房间号/主播已注销）
     var roomNotFound = roomData is! Map;
+    // 缺失或未知状态不能推断为下播。
+    var liveStatus = roomData is Map
+        ? int.tryParse(roomData["eLiveStatus"]?.toString() ?? "")
+        : null;
+    if (!roomNotFound && liveStatus != 1 && liveStatus != 2) {
+      throw CoreError("虎牙网页直播状态字段缺失");
+    }
+    var isLive = liveStatus == 2;
 
     // 开播时间（秒级时间戳）：直播中为本场开播时间，未开播时为上一次开播时间
     var showTime = await _getLiveStartTime(profileRoomId);
@@ -441,8 +444,9 @@ class HuyaSite implements LiveSite {
 
     // 直播地址（失效房间没有 liveLineUrl）
     var roomProfile = roomInfo["roomProfile"];
-    var liveLineUrl =
-        roomProfile is Map ? roomProfile["liveLineUrl"]?.toString() : null;
+    var liveLineUrl = roomProfile is Map
+        ? roomProfile["liveLineUrl"]?.toString()
+        : null;
     var playUrl = "";
     if (liveLineUrl != null && liveLineUrl.isNotEmpty) {
       try {
@@ -489,24 +493,24 @@ class HuyaSite implements LiveSite {
       header: requestHeadersWithCookie,
     );
     var text = RegExp(
-            r"window\.HNF_GLOBAL_INIT.=.\{[\s\S]*?\}[\s\S]*?</script>",
-            multiLine: false)
-        .firstMatch(resultText)
-        ?.group(0);
+      r"window\.HNF_GLOBAL_INIT.=.\{[\s\S]*?\}[\s\S]*?</script>",
+      multiLine: false,
+    ).firstMatch(resultText)?.group(0);
     var jsonText = text!
         .replaceAll(RegExp(r"window\.HNF_GLOBAL_INIT.=."), '')
         .replaceAll("</script>", "")
         .replaceAllMapped(RegExp(r'function.*?\(.*?\).\{[\s\S]*?\}'), (match) {
-      return '""';
-    });
+          return '""';
+        });
 
     var jsonObj = json.decode(jsonText);
     var topSid = int.tryParse(
-        RegExp(r'lChannelId":([0-9]+)').firstMatch(resultText)?.group(1) ??
-            "0");
+      RegExp(r'lChannelId":([0-9]+)').firstMatch(resultText)?.group(1) ?? "0",
+    );
     var subSid = int.tryParse(
-        RegExp(r'lSubChannelId":([0-9]+)').firstMatch(resultText)?.group(1) ??
-            "0");
+      RegExp(r'lSubChannelId":([0-9]+)').firstMatch(resultText)?.group(1) ??
+          "0",
+    );
     jsonObj["topSid"] = topSid;
     jsonObj["subSid"] = subSid;
     return jsonObj;
@@ -520,11 +524,7 @@ class HuyaSite implements LiveSite {
     try {
       var res = await HttpClient.instance.getJson(
         "https://mp.huya.com/cache.php",
-        queryParameters: {
-          "m": "Live",
-          "do": "profileRoom",
-          "roomid": roomId,
-        },
+        queryParameters: {"m": "Live", "do": "profileRoom", "roomid": roomId},
         header: {
           "user-agent": kUserAgent,
           "referer": "https://m.huya.com/$roomId",
@@ -534,7 +534,9 @@ class HuyaSite implements LiveSite {
       var result = res is String ? json.decode(res) : res;
 
       if (result["status"] != 200) {
-        CoreLog.d('虎牙房间信息获取失败 [$roomId]: ${result["status"]} ${result["message"]}');
+        CoreLog.d(
+          '虎牙房间信息获取失败 [$roomId]: ${result["status"]} ${result["message"]}',
+        );
         // 422 = 该主播不存在（旧房间号/已注销），用于区分「未开播」和「已失效」
         if (result["status"] == 422) {
           return {"notFound": true};
@@ -547,10 +549,18 @@ class HuyaSite implements LiveSite {
         return null;
       }
 
-      // 直播状态为 "ON"/"OFF"，个别情况下可能是布尔值
+      // Missing or unrecognized status is not evidence that the room is offline.
       var liveStatus = data["liveStatus"];
+      bool? isLive;
+      if (liveStatus == "ON" || liveStatus == true) {
+        isLive = true;
+      } else if (liveStatus == "OFF" || liveStatus == false) {
+        isLive = false;
+      } else {
+        return null;
+      }
       return {
-        "isLive": liveStatus == "ON" || liveStatus == true,
+        "isLive": isLive,
         "startTime": LiveDuration.parse(data["liveData"]?["startTime"]),
       };
     } catch (e) {
@@ -573,7 +583,11 @@ class HuyaSite implements LiveSite {
       var roomInfo = await _getRoomInfo(roomId);
       var roomData = roomInfo["roomInfo"];
       if (roomData is! Map) {
-        return "";
+        return null;
+      }
+      var liveStatus = int.tryParse(roomData["eLiveStatus"]?.toString() ?? "");
+      if (liveStatus != 1 && liveStatus != 2) {
+        return null;
       }
       var pid = roomData["tLiveInfo"]?["lProfileRoom"]?.toString() ?? "";
       if (pid.isEmpty || pid == "0" || pid == roomId) {
@@ -586,41 +600,95 @@ class HuyaSite implements LiveSite {
     }
   }
 
-  @override
-  Future<LiveRoomStatus> getRoomStatus({required String roomId}) async {
-    var info = await _getMpLiveInfo(roomId);
-    if (info != null && info["notFound"] == true) {
-      // mp 不认识这个号：可能是别名/旧号，用页面解析出标准房间号再试
-      var resolved = await _resolveProfileRoomId(roomId);
-      if (resolved == null) {
-        // 判断不了，按普通流程走
-        return defaultGetRoomStatus(this, roomId: roomId);
-      }
-      if (resolved.isEmpty) {
-        return LiveRoomStatus(roomId: roomId, isLive: false, roomNotFound: true);
-      }
-      info = await _getMpLiveInfo(resolved);
-    }
-    if (info == null) {
-      // mp 接口拿不到时回落到「查页面状态 + 详情」
-      return defaultGetRoomStatus(this, roomId: roomId);
-    }
-    if (info["notFound"] == true) {
+  Future<LiveRoomStatus> _getWebRoomStatus(String roomId) async {
+    var roomInfo = await _getRoomInfo(roomId);
+    var roomData = roomInfo["roomInfo"];
+    if (roomData is! Map) {
       return LiveRoomStatus(roomId: roomId, isLive: false, roomNotFound: true);
     }
-    var isLive = info["isLive"] == true;
-    var startTime = info["startTime"] as String?;
+    var liveStatus = int.tryParse(roomData["eLiveStatus"]?.toString() ?? "");
+    if (liveStatus != 1 && liveStatus != 2) {
+      return LiveRoomStatus(
+        roomId: roomId,
+        isLive: false,
+        querySucceeded: false,
+      );
+    }
+    var profileRoomId =
+        roomData["tLiveInfo"]?["lProfileRoom"]?.toString() ?? "";
+    if (profileRoomId.isEmpty || profileRoomId == "0") {
+      profileRoomId = roomId;
+    }
+    var showTime = await _getLiveStartTime(profileRoomId);
+    var isLive = liveStatus == 2;
     return LiveRoomStatus(
-      roomId: roomId,
+      roomId: profileRoomId,
       isLive: isLive,
-      startTime: isLive ? startTime : null,
-      lastLiveTime: isLive ? null : startTime,
+      startTime: isLive ? showTime : null,
+      lastLiveTime: isLive ? null : showTime,
     );
   }
 
   @override
-  Future<LiveSearchRoomResult> searchRooms(String keyword,
-      {int page = 1}) async {
+  Future<LiveRoomStatus> getRoomStatus({required String roomId}) async {
+    try {
+      var info = await _getMpLiveInfo(roomId);
+      if (info != null && info["notFound"] == true) {
+        // mp 不认识这个号：可能是别名/旧号，用页面解析出标准房间号再试
+        var resolved = await _resolveProfileRoomId(roomId);
+        if (resolved == null) {
+          return await _getWebRoomStatus(roomId);
+        }
+        if (resolved.isEmpty) {
+          return LiveRoomStatus(
+            roomId: roomId,
+            isLive: false,
+            roomNotFound: true,
+          );
+        }
+        info = await _getMpLiveInfo(resolved);
+      }
+      if (info == null) {
+        // mp 接口拿不到时回落到网页状态；网页字段缺失会返回失败。
+        return await _getWebRoomStatus(roomId);
+      }
+      if (info["notFound"] == true) {
+        return LiveRoomStatus(
+          roomId: roomId,
+          isLive: false,
+          roomNotFound: true,
+        );
+      }
+      var isLive = info["isLive"] == true;
+      var startTime = info["startTime"] as String?;
+      return LiveRoomStatus(
+        roomId: roomId,
+        isLive: isLive,
+        startTime: isLive ? startTime : null,
+        lastLiveTime: isLive ? null : startTime,
+      );
+    } catch (e) {
+      CoreLog.error(e);
+      if (e is CoreError && e.statusCode == 404) {
+        return LiveRoomStatus(
+          roomId: roomId,
+          isLive: false,
+          roomNotFound: true,
+        );
+      }
+      return LiveRoomStatus(
+        roomId: roomId,
+        isLive: false,
+        querySucceeded: false,
+      );
+    }
+  }
+
+  @override
+  Future<LiveSearchRoomResult> searchRooms(
+    String keyword, {
+    int page = 1,
+  }) async {
     var resultText = await HttpClient.instance.getJson(
       "https://search.cdn.huya.com/",
       queryParameters: {
@@ -662,8 +730,10 @@ class HuyaSite implements LiveSite {
   }
 
   @override
-  Future<LiveSearchAnchorResult> searchAnchors(String keyword,
-      {int page = 1}) async {
+  Future<LiveSearchAnchorResult> searchAnchors(
+    String keyword, {
+    int page = 1,
+  }) async {
     var resultText = await HttpClient.instance.getJson(
       "https://search.cdn.huya.com/",
       queryParameters: {
@@ -696,7 +766,15 @@ class HuyaSite implements LiveSite {
   @override
   Future<bool> getLiveStatus({required String roomId}) async {
     var roomInfo = await _getRoomInfo(roomId);
-    return roomInfo["roomInfo"]?["eLiveStatus"] == 2;
+    var roomData = roomInfo["roomInfo"];
+    if (roomData is! Map) {
+      throw FormatException("虎牙房间状态字段缺失");
+    }
+    var liveStatus = int.tryParse(roomData["eLiveStatus"]?.toString() ?? "");
+    if (liveStatus != 1 && liveStatus != 2) {
+      throw FormatException("虎牙房间状态字段无效");
+    }
+    return liveStatus == 2;
   }
 
   /// 匿名登录获取uid
@@ -708,19 +786,16 @@ class HuyaSite implements LiveSite {
         "byPass": 3,
         "context": "",
         "version": "2.4",
-        "data": {}
+        "data": {},
       },
-      header: {
-        "user-agent": kUserAgent,
-      },
+      header: {"user-agent": kUserAgent},
     );
     return result["data"]["uid"].toString();
   }
 
   int rotl64(int t) {
     final low = t & 0xFFFFFFFF;
-    final rotatedLow =
-    ((low << 8) | (low >> 24)) & 0xFFFFFFFF;
+    final rotatedLow = ((low << 8) | (low >> 24)) & 0xFFFFFFFF;
     final high = t & ~0xFFFFFFFF;
     return high | rotatedLow;
   }
@@ -797,8 +872,8 @@ class HuyaSite implements LiveSite {
 
     final wsTime = (DateTime.now().millisecondsSinceEpoch ~/ 1000 + 21600)
         .toRadixString(16);
-    final seqId =
-        (DateTime.now().millisecondsSinceEpoch + int.parse(uid)).toString();
+    final seqId = (DateTime.now().millisecondsSinceEpoch + int.parse(uid))
+        .toString();
 
     final fm = utf8.decode(base64.decode(Uri.decodeComponent(query['fm']!)));
     final wsSecretPrefix = fm.split('_').first;
@@ -806,35 +881,41 @@ class HuyaSite implements LiveSite {
         .convert(utf8.encode('$seqId|${query["ctype"]}|${query["t"]}'))
         .toString();
     final wsSecret = md5
-        .convert(utf8.encode(
-            '${wsSecretPrefix}_${uid}_${streamname}_${wsSecretHash}_$wsTime'))
+        .convert(
+          utf8.encode(
+            '${wsSecretPrefix}_${uid}_${streamname}_${wsSecretHash}_$wsTime',
+          ),
+        )
         .toString();
 
-    return Uri(queryParameters: {
-      "wsSecret": wsSecret,
-      "wsTime": wsTime,
-      "seqid": seqId,
-      "ctype": query["ctype"]!,
-      "ver": "1",
-      "fs": query["fs"]!,
-      // "sphdcdn": query["sphdcdn"] ?? "",
-      // "sphdDC": query["sphdDC"] ?? "",
-      // "sphd": query["sphd"] ?? "",
-      // "exsphd": query["exsphd"] ?? "",
-      "dMod": "mseh-0",
-      "sdkPcdn": "1_1",
-      "uid": uid,
-      "uuid": getUUid(),
-      "t": query["t"]!,
-      "sv": "202411221719",
-      "sdk_sid": "1732862566708",
-      "a_block": "0"
-    }).query;
+    return Uri(
+      queryParameters: {
+        "wsSecret": wsSecret,
+        "wsTime": wsTime,
+        "seqid": seqId,
+        "ctype": query["ctype"]!,
+        "ver": "1",
+        "fs": query["fs"]!,
+        // "sphdcdn": query["sphdcdn"] ?? "",
+        // "sphdDC": query["sphdDC"] ?? "",
+        // "sphd": query["sphd"] ?? "",
+        // "exsphd": query["exsphd"] ?? "",
+        "dMod": "mseh-0",
+        "sdkPcdn": "1_1",
+        "uid": uid,
+        "uuid": getUUid(),
+        "t": query["t"]!,
+        "sv": "202411221719",
+        "sdk_sid": "1732862566708",
+        "a_block": "0",
+      },
+    ).query;
   }
 
   @override
-  Future<List<LiveSuperChatMessage>> getSuperChatMessage(
-      {required String roomId}) {
+  Future<List<LiveSuperChatMessage>> getSuperChatMessage({
+    required String roomId,
+  }) {
     //尚不支持
     return Future.value([]);
   }
@@ -864,10 +945,7 @@ class HuyaUrlDataModel {
   }
 }
 
-enum HuyaLineType {
-  flv,
-  hls,
-}
+enum HuyaLineType { flv, hls }
 
 class HuyaLineModel {
   final String line;
@@ -908,16 +986,10 @@ class HuyaBitRateModel {
   final String name;
   final int bitRate;
 
-  HuyaBitRateModel({
-    required this.bitRate,
-    required this.name,
-  });
+  HuyaBitRateModel({required this.bitRate, required this.name});
 
   @override
   String toString() {
-    return json.encode({
-      "name": name,
-      "bitRate": bitRate,
-    });
+    return json.encode({"name": name, "bitRate": bitRate});
   }
 }

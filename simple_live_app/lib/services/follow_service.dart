@@ -16,6 +16,8 @@ import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/follow_user_tag.dart';
+import 'package:simple_live_app/models/live_start_tracker.dart';
+import 'package:simple_live_app/services/live_notification_service.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
@@ -50,6 +52,14 @@ class FollowService extends GetxService {
   var updating = false.obs;
 
   Timer? updateTimer;
+  Timer? _reminderTimer;
+  final _reminderTracker = LiveStartTracker();
+  final Map<String, Future<void>> _statusQueries = {};
+  final Map<String, int> _statusRevisions = {};
+  final Map<String, DateTime> _lastStatusChecks = {};
+  Future<void>? _refreshFuture;
+  bool _checkingReminders = false;
+  int _reminderGeneration = 0;
 
   @override
   void onInit() {
@@ -57,6 +67,8 @@ class FollowService extends GetxService {
       loadData(updateStatus: false);
     });
     initTimer();
+    unawaited(loadData(updateStatus: false));
+    initReminderTimer();
     super.onInit();
   }
 
@@ -113,14 +125,127 @@ class FollowService extends GetxService {
       DBService.instance.updateFollowTag(tag);
     }
     // 标签内排序
-    curTagFollowList.sort(
-      (a, b) => b.liveStatus.value.compareTo(a.liveStatus.value),
-    );
+    curTagFollowList
+        .sort((a, b) => followList.indexOf(a).compareTo(followList.indexOf(b)));
   }
 
-  // 添加关注
+  FollowUser? getFollowUser(String id) {
+    for (final item in followList) {
+      if (item.id == id) return item;
+    }
+    return null;
+  }
+
   Future<void> addFollow(FollowUser follow) async {
+    final old = getFollowUser(follow.id);
     await DBService.instance.addFollow(follow);
+    final index = followList.indexWhere((item) => item.id == follow.id);
+    if (index < 0) {
+      followList.add(follow);
+    } else {
+      followList[index] = follow;
+    }
+    if (old?.isSpecial != follow.isSpecial) _reminderTracker.forget(follow.id);
+    filterData();
+    if (follow.isSpecial && old == null) unawaited(updateLiveStatus(follow));
+  }
+
+  Future<void> setSpecialFollow(FollowUser follow, bool value) async {
+    final current = getFollowUser(follow.id);
+    if (current == null || current.isSpecial == value) return;
+    final old = current.isSpecial;
+    current.isSpecial = value;
+    try {
+      await DBService.instance.addFollow(current);
+    } catch (_) {
+      current.isSpecial = old;
+      rethrow;
+    }
+    _reminderTracker.forget(current.id);
+    filterData();
+    // 刚设为特别关注时重新建基线，已在播的主播不会突然补发通知。
+    if (value) unawaited(updateLiveStatus(current));
+  }
+
+  Future<void> removeFollow(FollowUser follow) async {
+    await DBService.instance.deleteFollow(follow.id);
+    _reminderTracker.forget(follow.id);
+    _lastStatusChecks.remove(follow.id);
+    followList.removeWhere((item) => item.id == follow.id);
+    for (final tag in DBService.instance.getFollowTagList()) {
+      if (tag.userId.contains(follow.id)) {
+        tag.userId.removeWhere((id) => id == follow.id);
+        await DBService.instance.updateFollowTag(tag);
+      }
+    }
+    getAllTagList();
+    filterData();
+  }
+
+  Future<void> setFollowTags(FollowUser follow, List<String> tagIds) async {
+    final current = getFollowUser(follow.id);
+    if (current == null) return;
+    final selected = tagIds.toSet();
+    final tags = DBService.instance.getFollowTagList();
+    for (final tag in tags) {
+      final contains = tag.userId.contains(current.id);
+      if (selected.contains(tag.id) == contains) continue;
+      tag.userId.removeWhere((id) => id == current.id);
+      if (selected.contains(tag.id)) tag.userId.add(current.id);
+      await DBService.instance.updateFollowTag(tag);
+    }
+    current.tag = tags
+            .where((tag) => selected.contains(tag.id))
+            .map((tag) => tag.tag)
+            .firstOrNull ??
+        '全部';
+    await DBService.instance.addFollow(current);
+    getAllTagList();
+    filterData();
+  }
+
+  void initReminderTimer({bool resetBaseline = false}) {
+    _reminderTimer?.cancel();
+    if (resetBaseline) {
+      _reminderGeneration++;
+      _reminderTracker.clear();
+      _lastStatusChecks.clear();
+    }
+    if (!AppSettingsController.instance.specialFollowNotifyEnable.value) return;
+    _reminderTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      unawaited(checkSpecialFollows());
+    });
+    unawaited(checkSpecialFollows());
+  }
+
+  Future<void> checkSpecialFollows() async {
+    if (_checkingReminders ||
+        !AppSettingsController.instance.specialFollowNotifyEnable.value) {
+      return;
+    }
+    _checkingReminders = true;
+    try {
+      final queue =
+          Queue<FollowUser>.from(followList.where((item) => item.isSpecial));
+      Future<void> worker() async {
+        while (queue.isNotEmpty &&
+            !isClosed &&
+            AppSettingsController.instance.specialFollowNotifyEnable.value) {
+          final item = queue.removeFirst();
+          final last = _lastStatusChecks[item.id];
+          if (last != null &&
+              DateTime.now().difference(last) < const Duration(seconds: 45)) {
+            continue;
+          }
+          await updateLiveStatus(item);
+        }
+      }
+
+      await Future.wait(List.generate(4, (_) => worker()));
+    } finally {
+      _checkingReminders = false;
+      if (!isClosed) filterData();
+    }
   }
 
   void initTimer() {
@@ -143,21 +268,33 @@ class FollowService extends GetxService {
   Future<void> loadData({bool updateStatus = true}) async {
     var list = DBService.instance.getFollowList();
     getAllTagList();
-    if (list.isEmpty) {
-      updating.value = false;
-      followList.assignAll(list);
-      return;
+    final old = {for (final item in followList) item.id: item};
+    for (final item in list) {
+      final previous = old[item.id];
+      if (previous != null && !identical(previous, item)) {
+        item.liveStatus.value = previous.liveStatus.value;
+        item.liveStartTime = previous.liveStartTime;
+        item.lastLiveTime = previous.lastLiveTime;
+        item.roomNotFound = previous.roomNotFound;
+      }
+      if (previous?.isSpecial != item.isSpecial) {
+        _reminderTracker.forget(item.id);
+      }
     }
+    final ids = list.map((item) => item.id).toSet();
+    _lastStatusChecks.removeWhere((id, _) => !ids.contains(id));
     followList.assignAll(list);
-    if (updateStatus) {
-      startUpdateStatus();
-    }
+    _reminderTracker.retain(
+        list.where((item) => item.isSpecial).map((item) => item.id).toSet());
+    filterData();
+    if (updateStatus && list.isNotEmpty) await startUpdateStatus();
   }
 
   /// 获取最优并发数
   /// 根据 CPU 核心数和用户设置自动计算
   int getOptimalConcurrency() {
-    var userSetting = AppSettingsController.instance.updateFollowThreadCount.value;
+    var userSetting =
+        AppSettingsController.instance.updateFollowThreadCount.value;
 
     // 如果用户设置为 0，则自动根据 CPU 核心数计算
     if (userSetting == 0) {
@@ -192,44 +329,35 @@ class FollowService extends GetxService {
     return result;
   }
 
-  void startUpdateStatus() async {
+  Future<void> startUpdateStatus() {
+    return _refreshFuture ??= _refreshAllStatuses().whenComplete(() {
+      _refreshFuture = null;
+    });
+  }
+
+  Future<void> _refreshAllStatuses() async {
     updatedCount = 0;
     updating.value = true;
+    try {
+      await prepareBiliFollowing();
+      final queue =
+          Queue<FollowUser>.from(interleaveByPlatform(followList.toList()));
+      Future<void> worker() async {
+        while (queue.isNotEmpty && !isClosed) {
+          await updateLiveStatus(queue.removeFirst());
+          updatedCount++;
+        }
+      }
 
-    var concurrency = getOptimalConcurrency();
-
-    Log.logPrint("开始更新关注状态，并发数: $concurrency，总数: ${followList.length}");
-
-    // B站：登录后先用「关注列表」批量接口按需预取（目标驱动），
-    // 这样未开播的房间也能拿到上次直播时间，且不用逐个房间查
-    await prepareBiliFollowing();
-
-    // 按平台交错排列，避免单一平台阻塞
-    var interleavedList = interleaveByPlatform(followList);
-
-    // 创建任务队列
-    var taskQueue = Queue<FollowUser>.from(interleavedList);
-
-    // 工作函数 - 持续从队列中取任务执行
-    Future<void> worker(int workerId) async {
-      while (taskQueue.isNotEmpty) {
-        var item = taskQueue.removeFirst();
-        await updateLiveStatus(item);
+      await Future.wait(
+          List.generate(getOptimalConcurrency().clamp(1, 20), (_) => worker()));
+      if (!isClosed) saveBiliFollowingCache();
+    } finally {
+      if (!isClosed) {
+        updating.value = false;
+        filterData();
       }
     }
-
-    // 启动固定数量的并发 worker
-    var workers = <Future>[];
-    for (var i = 0; i < concurrency; i++) {
-      workers.add(worker(i));
-    }
-
-    await Future.wait(workers);
-
-    // 刷新结束后再存一次：此时后台的深层补齐可能已经完成
-    saveBiliFollowingCache();
-
-    Log.logPrint("关注状态更新完成");
   }
 
   bool _biliCacheLoaded = false;
@@ -286,33 +414,71 @@ class FollowService extends GetxService {
     }
   }
 
-  Future updateLiveStatus(FollowUser item) async {
+  Future<void> updateLiveStatus(FollowUser item) {
+    return _statusQueries[item.id] ??= _queryLiveStatus(item).whenComplete(() {
+      _statusQueries.remove(item.id);
+      _statusRevisions.remove(item.id);
+    });
+  }
+
+  Future<void> _queryLiveStatus(FollowUser item) async {
+    final revision = _statusRevisions[item.id] ?? 0;
     try {
-      var site = Sites.allSites[item.siteId]!;
-      // 一次拿全：是否直播 + 本场开播时间 / 上次直播时间
-      var status = await site.liveSite.getRoomStatus(roomId: item.roomId);
-      item.liveStatus.value = status.isLive ? 2 : 1;
-      item.roomNotFound = status.roomNotFound;
-      if (status.isLive) {
-        item.liveStartTime = status.startTime;
-        item.lastLiveTime = null;
-      } else {
-        item.liveStartTime = null;
-        item.lastLiveTime = status.lastLiveTime;
+      final site = Sites.allSites[item.siteId];
+      if (site == null || !identical(getFollowUser(item.id), item)) return;
+      final status = await site.liveSite
+          .getRoomStatus(roomId: item.roomId)
+          .timeout(const Duration(seconds: 25));
+      if (isClosed ||
+          !identical(getFollowUser(item.id), item) ||
+          revision != (_statusRevisions[item.id] ?? 0) ||
+          !status.querySucceeded) {
+        return;
       }
+      _applyLiveStatus(item, status);
     } catch (e) {
-      Log.logPrint(e);
-      item.liveStatus.value = 0;
-      item.liveStartTime = null;
-      item.lastLiveTime = null;
-      item.roomNotFound = false;
+      // 保留上次可信状态：查询失败并不代表下播。
+      Log.logPrint('关注状态查询失败 ${item.id}: $e');
     } finally {
-      updatedCount++;
-      if (updatedCount >= followList.length) {
+      if (!isClosed && _refreshFuture == null && !_checkingReminders) {
         filterData();
-        updating.value = false;
       }
     }
+  }
+
+  bool _applyLiveStatus(FollowUser item, LiveRoomStatus status) {
+    _lastStatusChecks[item.id] = DateTime.now();
+    final newStatus = status.isLive ? 2 : 1;
+    final changed = item.liveStatus.value != newStatus ||
+        item.roomNotFound != status.roomNotFound ||
+        item.liveStartTime != status.startTime ||
+        item.lastLiveTime != status.lastLiveTime;
+    item.roomNotFound = status.roomNotFound;
+    item.liveStartTime = status.startTime;
+    item.lastLiveTime = status.lastLiveTime;
+    item.liveStatus.value = newStatus;
+
+    final settings = AppSettingsController.instance;
+    if (settings.specialFollowNotifyEnable.value &&
+        item.isSpecial &&
+        _reminderTracker.observe(item.id,
+            isLive: status.isLive,
+            startTime: status.startTime,
+            querySucceeded: status.querySucceeded,
+            roomNotFound: status.roomNotFound)) {
+      final generation = _reminderGeneration;
+      unawaited(LiveNotificationService.instance.showLiveStarted(
+        siteId: item.siteId,
+        roomId: item.roomId,
+        userName: item.userName,
+        canShow: () =>
+            !isClosed &&
+            generation == _reminderGeneration &&
+            settings.specialFollowNotifyEnable.value &&
+            getFollowUser(item.id)?.isSpecial == true,
+      ));
+    }
+    return changed;
   }
 
   /// 进入直播间后把最新状态同步回关注列表
@@ -335,20 +501,23 @@ class FollowService extends GetxService {
     if (item == null) {
       return;
     }
-    var status = detail.status ? 2 : 1;
-    var startTime = detail.status ? detail.showTime : null;
-    var lastLiveTime = detail.status ? null : detail.lastLiveTime;
-    if (item.liveStatus.value == status &&
-        item.liveStartTime == startTime &&
-        item.lastLiveTime == lastLiveTime) {
-      return;
+    // 进房拿到的新状态比正在等待的轮询结果更及时。
+    if (_statusQueries.containsKey(item.id)) {
+      _statusRevisions.update(item.id, (revision) => revision + 1,
+          ifAbsent: () => 1);
     }
-    item.liveStatus.value = status;
-    item.liveStartTime = startTime;
-    item.lastLiveTime = lastLiveTime;
-    item.roomNotFound = detail.roomNotFound;
-    Log.logPrint("已同步直播间状态到关注列表：$siteId/$requestedRoomId");
-    filterData();
+    if (_applyLiveStatus(
+        item,
+        LiveRoomStatus(
+          roomId: detail.roomId,
+          isLive: detail.status && !detail.isRecord,
+          startTime: detail.status && !detail.isRecord ? detail.showTime : null,
+          lastLiveTime:
+              detail.status && !detail.isRecord ? null : detail.lastLiveTime,
+          roomNotFound: detail.roomNotFound,
+        ))) {
+      filterData();
+    }
   }
 
   void filterData() {
@@ -357,10 +526,12 @@ class FollowService extends GetxService {
       if (status != 0) {
         return status;
       }
+      if (a.isSpecial != b.isSpecial) return a.isSpecial ? -1 : 1;
       // 同为未开播：最近播过的排前面（没有时间的排在最后）
       var ta = int.tryParse(a.lastLiveTime ?? "0") ?? 0;
       var tb = int.tryParse(b.lastLiveTime ?? "0") ?? 0;
-      return tb.compareTo(ta);
+      final lastLive = tb.compareTo(ta);
+      return lastLive != 0 ? lastLive : b.addTime.compareTo(a.addTime);
     });
     liveList.assignAll(followList.where((x) => x.liveStatus.value == 2));
     notLiveList.assignAll(followList.where((x) => x.liveStatus.value == 1));
@@ -514,22 +685,8 @@ class FollowService extends GetxService {
     );
   }
 
-  String generateJson() {
-    var data = followList
-        .map(
-          (item) => {
-            "siteId": item.siteId,
-            "id": item.id,
-            "roomId": item.roomId,
-            "userName": item.userName,
-            "face": item.face,
-            "addTime": item.addTime.toString(),
-            "tag": item.tag
-          },
-        )
-        .toList();
-    return jsonEncode(data);
-  }
+  String generateJson() =>
+      jsonEncode(followList.map((item) => item.toJson()).toList());
 
   Future inputJson(String content) async {
     var data = jsonDecode(content);
@@ -551,7 +708,9 @@ class FollowService extends GetxService {
   @override
   void onClose() {
     updateTimer?.cancel();
+    _reminderTimer?.cancel();
     subscription?.cancel();
+    unawaited(_updatedListController.close());
     super.onClose();
   }
 }

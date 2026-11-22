@@ -290,6 +290,8 @@ class HuyaDanmaku implements LiveDanmaku {
   @override
   Future start(dynamic args) async {
     danmakuArgs = args as HuyaDanmakuArgs;
+    // 游客目录独立于账号和 WS，后台加载，不拖慢进房或弹幕连接。
+    unawaited(HuyaEmoticon.load());
     selfUid = int.tryParse(_cookieValue("udb_uid")) ?? 0;
     if (selfUid == 0) {
       selfUid = int.tryParse(_cookieValue("yyuid")) ?? 0;
@@ -630,7 +632,7 @@ class HuyaDanmaku implements LiveDanmaku {
 
           var color = messageNotice.bulletFormat.fontColor;
 
-          // 正文里的 [大笑] / {/dx} 之类标记换成图片表情
+          // 正文里的 [大笑] / /{dx 之类标记换成图片表情
           final spans = HuyaEmoticon.parseSpans(content);
           onMessage?.call(
             LiveMessage(
@@ -691,6 +693,12 @@ class HuyaDanmaku implements LiveDanmaku {
             if (error.isEmpty) {
               error = "发送失败（服务端返回错误）";
             }
+          }
+          // 905（wup request biz exception:905）= 登录态失效，给中文提示
+          if ((error != null &&
+                  (error.contains("905") || error.contains("biz exception"))) ||
+              text.contains(":905")) {
+            error = "虎牙登录已失效，请重新登录";
           }
           _sendCompleter?.complete(error);
         }

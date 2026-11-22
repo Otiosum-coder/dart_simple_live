@@ -85,7 +85,8 @@ class DouyinSite implements LiveSite {
           name: asT<String?>(subItem["partition"]["title"]) ?? "",
           parentId: id,
           // 子分类没有图就退回父分区的图，最后再交给界面的图标兜底
-          pic: DouyinGameArtwork.assetUriForCategory(
+          pic:
+              DouyinGameArtwork.assetUriForCategory(
                 categoryId:
                     '${subItem["partition"]["id_str"]},${subItem["partition"]["type"]}',
                 categoryName: asT<String?>(subItem["partition"]["title"]) ?? "",
@@ -107,7 +108,8 @@ class DouyinSite implements LiveSite {
           id: category.id,
           name: category.name,
           parentId: category.id,
-          pic: DouyinGameArtwork.assetUriForCategory(
+          pic:
+              DouyinGameArtwork.assetUriForCategory(
                 categoryId: id,
                 categoryName: asT<String?>(item["partition"]["title"]) ?? "",
               ) ??
@@ -235,6 +237,17 @@ class DouyinSite implements LiveSite {
     return LiveCategoryResult(hasMore: hasMore, items: items);
   }
 
+  int _parseRoomLiveStatus(dynamic value) {
+    var status = int.tryParse(value?.toString() ?? "");
+    if (status == null) {
+      throw CoreError("抖音直播状态字段缺失");
+    }
+    if (status != 2 && status != 4) {
+      throw CoreError("抖音直播状态字段无效");
+    }
+    return status;
+  }
+
   @override
   Future<LiveRoomDetail> getRoomDetail({required String roomId}) async {
     // 有两种roomId，一种是webRid，一种是roomId
@@ -258,10 +271,18 @@ class DouyinSite implements LiveSite {
     // 读取房间信息
     var roomData = await _getRoomDataByRoomId(roomId);
 
-    // 房间不存在时抖音返回 status_code != 0 且 data.room 为空
+    // 房间不存在时抖音返回 status_code != 0 且 data.room 为空。
+    // 缺少状态响应结构不能当作可信的下播结果。
+    var statusCode = int.tryParse(roomData["status_code"]?.toString() ?? "");
     var roomNode = roomData["data"] is Map ? roomData["data"]["room"] : null;
-    if (asT<int?>(roomData["status_code"]) != 0 || roomNode is! Map) {
+    if (statusCode == null) {
+      throw CoreError("抖音接口状态码缺失");
+    }
+    if (statusCode != 0 && roomNode is! Map) {
       return _notFoundDetail(roomId, "https://live.douyin.com/$roomId");
+    }
+    if (statusCode != 0 || roomNode is! Map) {
+      throw CoreError("抖音接口房间信息格式异常");
     }
 
     // 通过房间信息获取WebRid
@@ -275,7 +296,7 @@ class DouyinSite implements LiveSite {
     var room = roomData["data"]["room"];
     var owner = room["owner"];
 
-    var status = asT<int?>(room["status"]) ?? 0;
+    var status = _parseRoomLiveStatus(room["status"]);
 
     // roomId是一次性的，用户每次重新开播都会生成一个新的roomId
     // 所以如果roomId对应的直播间状态不是直播中，就通过webRid获取直播间信息
@@ -287,7 +308,8 @@ class DouyinSite implements LiveSite {
     var roomStatus = status == 2;
     // 开播时间：reflow 接口已经一并返回，无需额外请求
     // 直播中为本场开播时间，未开播时为上一次开播时间
-    var showTime = LiveDuration.parse(room["start_time"]) ??
+    var showTime =
+        LiveDuration.parse(room["start_time"]) ??
         LiveDuration.parse(room["create_time"]);
     if (roomStatus) {
       LiveDuration.log("抖音", webRid, showTime);
@@ -356,7 +378,10 @@ class DouyinSite implements LiveSite {
     var data = await _getRoomDataByApi(webRid);
 
     var list = data["data"];
-    if (list is! List || list.isEmpty) {
+    if (list is! List) {
+      throw CoreError("抖音网页房间列表格式异常");
+    }
+    if (list.isEmpty) {
       return _notFoundDetail(webRid, "https://live.douyin.com/$webRid");
     }
     var roomData = list[0];
@@ -370,7 +395,8 @@ class DouyinSite implements LiveSite {
 
     var owner = roomData["owner"];
 
-    var roomStatus = (asT<int?>(roomData["status"]) ?? 0) == 2;
+    var status = _parseRoomLiveStatus(roomData["status"]);
+    var roomStatus = status == 2;
 
     // 开播时间：web/enter 接口不返回，需要用 19 位 roomId 调 reflow 接口
     // 直播中为本场开播时间，未开播时为上一次开播时间
@@ -422,7 +448,8 @@ class DouyinSite implements LiveSite {
     var room = roomData["roomStore"]["roomInfo"]["room"];
     var owner = room["owner"];
     var anchor = roomData["roomStore"]["roomInfo"]["anchor"];
-    var roomStatus = (asT<int?>(room["status"]) ?? 0) == 2;
+    var status = _parseRoomLiveStatus(room["status"]);
+    var roomStatus = status == 2;
 
     // 开播时间：网页 HTML 里没有，用 19 位 roomId 调 reflow 接口
     // 直播中为本场开播时间，未开播时为上一次开播时间
@@ -853,7 +880,18 @@ class DouyinSite implements LiveSite {
       );
     } catch (e) {
       CoreLog.error(e);
-      return LiveRoomStatus(roomId: roomId, isLive: false);
+      if (e is CoreError && e.statusCode == 404) {
+        return LiveRoomStatus(
+          roomId: roomId,
+          isLive: false,
+          roomNotFound: true,
+        );
+      }
+      return LiveRoomStatus(
+        roomId: roomId,
+        isLive: false,
+        querySucceeded: false,
+      );
     }
   }
 
@@ -886,6 +924,7 @@ class DouyinSite implements LiveSite {
     return int.tryParse(stringBuffer.toString()) ??
         Random().nextInt(1000000000);
   }
+
   /// 从 partition 对象里翻出可用的图片地址（抖音字段名不固定，做深度兜底）
   String? _pickPartitionImageUrl(dynamic data) {
     if (data == null) {

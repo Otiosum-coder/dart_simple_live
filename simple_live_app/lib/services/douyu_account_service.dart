@@ -28,6 +28,7 @@ class DouyuAccountService extends GetxService {
         .getValue(LocalStorageService.kDouyuCookie, "");
     parseCookie();
     setSite();
+    _startupSilentRenew();
     super.onInit();
   }
 
@@ -174,9 +175,54 @@ class DouyuAccountService extends GetxService {
     }
   }
 
+  /// 播放 token（acf_jwt_token，约 7 天）续期：用 LTP0 + dy_did 静默换新 Cookie。
+  ///
+  /// 与 [refreshToken]（发弹幕用的 acf_dmjwt_token）是两条独立链路。
+  /// 成功写回并返回新 Cookie；失败返回 null（不登出，播放侧会重试 / 切线路）。
+  Future<String?> refreshPlayCookie() async {
+    var map = parseCookieMap(cookie);
+    var ltp0 = map["LTP0"] ?? "";
+    var did = map["dy_did"] ?? map["acf_did"] ?? "";
+    if (ltp0.isEmpty || did.isEmpty) {
+      Log.i("斗鱼播放续期：Cookie 里没有 LTP0 / dy_did，跳过");
+      return null;
+    }
+    try {
+      var fresh = await DouyuPassport.refreshPlayCookie(
+        dyDid: did,
+        ltp0: ltp0,
+        currentCookie: cookie,
+      );
+      setCookie(fresh);
+      Log.i("斗鱼播放续期成功");
+      return fresh;
+    } catch (e) {
+      Log.logPrint("斗鱼播放续期失败：$e");
+      return null;
+    }
+  }
+
+  /// 启动时后台静默续期：播放 token 临近过期（12 小时内）才续，非阻塞、失败不登出。
+  /// 配合拉流时的兜底续期，用户几乎每 7 天内启动一次就不会掉登录态。
+  void _startupSilentRenew() {
+    var map = parseCookieMap(cookie);
+    var hasCred = (map["LTP0"]?.isNotEmpty ?? false) &&
+        ((map["dy_did"] ?? map["acf_did"])?.isNotEmpty ?? false);
+    if (!hasCred) return;
+    if (!DouyuPassport.isCookieExpired(cookie,
+        ahead: const Duration(hours: 12))) {
+      return;
+    }
+    Log.i("斗鱼启动续期：播放 token 临近过期，后台续期");
+    Future.microtask(() => refreshPlayCookie());
+  }
+
   void setSite() {
     var site = (Sites.allSites[Constant.kDouyu]!.liveSite as DouyuSite);
     site.cookie = cookie;
+    var map = parseCookieMap(cookie);
+    site.deviceId = map["dy_did"] ?? map["acf_did"] ?? "";
+    site.onCookieExpired = refreshPlayCookie;
   }
 
   void setCookie(String value) {

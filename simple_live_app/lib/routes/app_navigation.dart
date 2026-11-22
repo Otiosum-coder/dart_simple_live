@@ -8,6 +8,8 @@ import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/sync_client_info_model.dart';
+import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
+import 'package:simple_live_app/modules/multi_live/session/multi_live_room_spec.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/modules/mine/account/douyu/douyu_login_sheet.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
@@ -25,9 +27,8 @@ class AppNavigator {
     Get.toNamed(RoutePath.kCategoryDetail, arguments: [site, category]);
   }
 
-  /// 跳转至直播间
-  static void toLiveRoomDetail(
-      {required Site site, required String roomId}) async {
+  /// 单开和多开共享相同的平台登录提示。
+  static Future<void> showLiveRoomLoginTip(Site site) async {
     if (site.id == Constant.kBiliBili &&
         !BiliBiliAccountService.instance.logined.value &&
         AppSettingsController.instance.bilibiliLoginTip.value) {
@@ -69,16 +70,65 @@ class AppNavigator {
         ],
       );
       if (result == true) {
-        showDouyuLoginSheet();
+        await showDouyuLoginSheet();
         if (!DouyuAccountService.instance.logined.value) {
           SmartDialog.showToast("可稍后在「我的-账号管理」中登录斗鱼");
         }
       }
     }
 
+  }
+
+  /// 跳转至直播间
+  static Future<void> toLiveRoomDetail(
+      {required Site site,
+      required String roomId,
+      bool reuseActiveRoom = false}) async {
+    await showLiveRoomLoginTip(site);
+    if (reuseActiveRoom && Get.isRegistered<LiveRoomController>()) {
+      var foundRoom = false;
+      Get.until((route) {
+        foundRoom = Uri.tryParse(route.settings.name ?? "")?.path ==
+            RoutePath.kLiveRoomDetail;
+        return foundRoom || route.isFirst;
+      });
+      if (foundRoom) {
+        await Get.find<LiveRoomController>().resetRoom(site, roomId);
+        return;
+      }
+    }
     Get.toNamed(RoutePath.kLiveRoomDetail, arguments: site, parameters: {
       "roomId": roomId,
     });
+    // 等绑定完成后再处理下一次通知，不等待整个页面退出。
+    await WidgetsBinding.instance.endOfFrame;
+  }
+
+  static bool _switchingToMultiLive = false;
+
+  /// 先关闭单开路由拥有的播放器和发送资源，再替换路由。
+  static Future<void> toMultiLive(
+      BuildContext context, LiveRoomController room) async {
+    final origin = ModalRoute.of(context);
+    if (_switchingToMultiLive || room.isClosed || origin?.isCurrent != true) return;
+    _switchingToMultiLive = true;
+    final spec = MultiLiveRoomSpec(
+      siteId: room.site.id,
+      roomId: room.roomId,
+      streamerName: room.detail.value?.userName,
+      liveTitle: room.detail.value?.title,
+      danmakuVisible: room.showDanmakuState.value,
+    );
+    try {
+      await room.closeRoom();
+      if (!context.mounted || origin?.isCurrent != true) return;
+      Get.offNamed(RoutePath.kMultiLive, arguments: spec);
+      await WidgetsBinding.instance.endOfFrame;
+    } catch (_) {
+      SmartDialog.showToast('无法切换到多开直播');
+    } finally {
+      _switchingToMultiLive = false;
+    }
   }
 
   /// 跳转至哔哩哔哩登录

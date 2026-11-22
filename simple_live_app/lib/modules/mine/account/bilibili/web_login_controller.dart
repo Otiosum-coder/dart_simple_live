@@ -64,7 +64,7 @@ class BiliBiliWebLoginController extends BaseController {
       }
       var cookieStr =
           cookieMap.entries.map((e) => "${e.key}=${e.value}").join(";");
-      Log.i(cookieStr);
+      Log.i("B站网页登录：已获取登录凭证");
       BiliBiliAccountService.instance.setCookie(cookieStr);
       await BiliBiliAccountService.instance.loadUserInfo();
       Get.back();

@@ -3,7 +3,6 @@ import 'dart:math' as math;
 
 import 'package:floating/floating.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:lottie/lottie.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -157,8 +156,8 @@ class LiveRoomPage extends GetView<LiveRoomController> {
   }
 
   Widget buildTabletUI(BuildContext context) {
-    var panelWidth = (MediaQuery.sizeOf(context).width * 0.36)
-        .clamp(200.0, 300.0);
+    var panelWidth =
+        (MediaQuery.sizeOf(context).width * 0.36).clamp(200.0, 300.0);
     // 桌面端：右侧面板贯通到底，输入框属于「聊天」页；
     // 左侧底栏只放操作按钮、宽度 = 视频区。
     var isDesktop = !Platform.isAndroid && !Platform.isIOS;
@@ -215,7 +214,8 @@ class LiveRoomPage extends GetView<LiveRoomController> {
   ///
   /// * 桌面端：只占视频区宽度，不含输入框（输入框在聊天页内）
   /// * 移动端横屏：横跨整个窗口，最右侧是输入框（保持原布局）
-  Widget buildBottomActionsBar(BuildContext context, {bool includeInput = false}) {
+  Widget buildBottomActionsBar(BuildContext context,
+      {bool includeInput = false}) {
     return Container(
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
@@ -239,25 +239,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
             label: const Text("刷新"),
           ),
           AppStyle.hGap4,
-          Obx(
-            () => controller.followed.value
-                ? TextButton.icon(
-                    style: TextButton.styleFrom(
-                      textStyle: const TextStyle(fontSize: 14),
-                    ),
-                    onPressed: controller.removeFollowUser,
-                    icon: const Icon(Remix.heart_fill),
-                    label: const Text("取消关注"),
-                  )
-                : TextButton.icon(
-                    style: TextButton.styleFrom(
-                      textStyle: const TextStyle(fontSize: 14),
-                    ),
-                    onPressed: controller.followUser,
-                    icon: const Icon(Remix.heart_line),
-                    label: const Text("关注"),
-                  ),
-          ),
+          buildFollowButton(context),
           const Expanded(child: Center()),
           TextButton.icon(
             style: TextButton.styleFrom(
@@ -499,7 +481,6 @@ class LiveRoomPage extends GetView<LiveRoomController> {
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 12.5, color: Color(0xFF8B9299)),
           ),
-
         ],
       ),
     );
@@ -634,37 +615,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                   if (AppSettingsController
                       .instance.playerSendDanmaku.value) ...[
                     const SizedBox(height: 6),
-                    InkWell(
-                      borderRadius: AppStyle.radius8,
-                      onTap: controller.followed.value
-                          ? controller.removeFollowUser
-                          : controller.followUser,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 5,
-                        ),
-                        decoration: BoxDecoration(
-                          borderRadius: AppStyle.radius8,
-                          color: Colors.transparent,
-                          border: Border.all(
-                            color: controller.followed.value
-                                ? Colors.grey.withAlpha(90)
-                                : Theme.of(context).colorScheme.primary,
-                          ),
-                        ),
-                        child: Text(
-                          controller.followed.value ? "已关注" : "关注",
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: controller.followed.value
-                                ? Colors.grey
-                                : Theme.of(context).colorScheme.primary,
-                          ),
-                        ),
-                      ),
-                    ),
+                    buildFollowButton(context, compact: true),
                   ],
                 ],
               ),
@@ -673,6 +624,69 @@ class LiveRoomPage extends GetView<LiveRoomController> {
         ),
       ),
     );
+  }
+
+  Widget buildFollowButton(BuildContext context, {bool compact = false}) {
+    return Obx(() {
+      final followed = controller.isFollowed;
+      final special = controller.isSpecialFollow;
+      final label = followed ? (special ? '特别关注' : '已关注') : '关注';
+      final icon = followed
+          ? (special ? Icons.star_rounded : Icons.star_outline_rounded)
+          : Remix.heart_line;
+      final color = followed && !special
+          ? Colors.grey
+          : Theme.of(context).colorScheme.primary;
+      final content = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(label, maxLines: 1),
+          if (followed) Icon(Icons.arrow_drop_down, size: compact ? 14 : 16),
+        ],
+      );
+      if (compact) {
+        return InkWell(
+          borderRadius: AppStyle.radius8,
+          onTap: controller.showFollowManagement,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+            decoration: BoxDecoration(
+              borderRadius: AppStyle.radius8,
+              color: Colors.transparent,
+              border: Border.all(
+                color: followed && !special
+                    ? Colors.grey.withAlpha(90)
+                    : Theme.of(context).colorScheme.primary,
+              ),
+            ),
+            child: IconTheme(
+              data: IconThemeData(color: color, size: 14),
+              child: DefaultTextStyle(
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: color,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [Icon(icon), AppStyle.hGap4, content],
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+      return TextButton.icon(
+        style: TextButton.styleFrom(
+          textStyle: const TextStyle(fontSize: 14),
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          iconSize: 20,
+        ),
+        onPressed: controller.showFollowManagement,
+        icon: Icon(icon),
+        label: content,
+      );
+    });
   }
 
   Widget buildBottomActions(BuildContext context) {
@@ -689,25 +703,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
       child: Row(
         children: [
           Expanded(
-            child: Obx(
-              () => controller.followed.value
-                  ? TextButton.icon(
-                      style: TextButton.styleFrom(
-                        textStyle: const TextStyle(fontSize: 14),
-                      ),
-                      onPressed: controller.removeFollowUser,
-                      icon: const Icon(Remix.heart_fill),
-                      label: const Text("取消关注"),
-                    )
-                  : TextButton.icon(
-                      style: TextButton.styleFrom(
-                        textStyle: const TextStyle(fontSize: 14),
-                      ),
-                      onPressed: controller.followUser,
-                      icon: const Icon(Remix.heart_line),
-                      label: const Text("关注"),
-                    ),
-            ),
+            child: buildFollowButton(context),
           ),
           Expanded(
             child: TextButton.icon(
@@ -797,8 +793,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
               child: TabBarView(
                 children: [
                   buildChatTab(),
-                  if (showSuperChat)
-                    buildSuperChats(),
+                  if (showSuperChat) buildSuperChats(),
                   buildFollowList(),
                   buildSettings(),
                 ],
@@ -1013,7 +1008,8 @@ class LiveRoomPage extends GetView<LiveRoomController> {
   }
 
   /// 是否桌面端（鼠标交互）
-  bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+  bool get _isDesktop =>
+      Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
   /// 把一条聊天消息包成「可复制」条目
   ///
@@ -1274,7 +1270,6 @@ class LiveRoomPage extends GetView<LiveRoomController> {
             ],
           ),
         ),
-
       ],
     );
   }
@@ -1292,6 +1287,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                 return Obx(
                   () => FollowUserItem(
                     item: item,
+                    showManageAction: false,
                     playing: controller.rxSite.value.id == item.siteId &&
                         controller.rxRoomId.value == item.roomId,
                     onTap: () {
@@ -1323,6 +1319,11 @@ class LiveRoomPage extends GetView<LiveRoomController> {
 
   List<Widget> buildAppbarActions(BuildContext context) {
     return [
+      IconButton(
+        tooltip: '多开直播',
+        icon: const Icon(Remix.layout_grid_line),
+        onPressed: () => AppNavigator.toMultiLive(context, controller),
+      ),
       IconButton(
         onPressed: () {
           showMore();
@@ -1366,7 +1367,8 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                 secondary: const Icon(Icons.headphones),
                 title: const Text("允许后台播放"),
                 subtitle: const Text("退到后台继续播放（通知栏一条静音通知）"),
-                value: AppSettingsController.instance.playerBackgroundPlay.value,
+                value:
+                    AppSettingsController.instance.playerBackgroundPlay.value,
                 onChanged: (e) {
                   AppSettingsController.instance.setPlayerBackgroundPlay(e);
                   if (e) {

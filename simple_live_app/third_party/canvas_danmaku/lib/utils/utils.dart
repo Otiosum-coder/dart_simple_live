@@ -38,8 +38,19 @@ bool _isEmojiCodePoint(int code) {
     return true;
   }
   const singles = {
-    0x203C, 0x2049, 0x2122, 0x2139, 0x24C2, 0x3030, 0x303D, 0x3297, 0x3299,
-    0x00A9, 0x00AE, 0x2934, 0x2935,
+    0x203C,
+    0x2049,
+    0x2122,
+    0x2139,
+    0x24C2,
+    0x3030,
+    0x303D,
+    0x3297,
+    0x3299,
+    0x00A9,
+    0x00AE,
+    0x2934,
+    0x2935,
   };
   return singles.contains(code);
 }
@@ -108,24 +119,29 @@ class Utils {
         ),
       ),
       textDirection: TextDirection.ltr,
-    )..layout();
-    final imageSize = fontSize * emojiScale;
-    var imageTotalWidth = 0.0;
-    var imageMaxSize = 0.0;
-    for (final part in parts) {
-      if (part.isImage && (part.imageUrl ?? "").trim().isNotEmpty) {
-        final size = imageSize * part.scale;
-        // 表情宽度按素材真实宽高比算，宽扁的表情（如 2333）才不会被压窄
-        imageTotalWidth += size * part.ratio;
-        if (size > imageMaxSize) {
-          imageMaxSize = size;
+    );
+    try {
+      textPainter.layout();
+      final imageSize = fontSize * emojiScale;
+      var imageTotalWidth = 0.0;
+      var imageMaxSize = 0.0;
+      for (final part in parts) {
+        if (part.isImage && (part.imageUrl ?? "").trim().isNotEmpty) {
+          final size = imageSize * part.scale;
+          // 表情宽度按素材真实宽高比算，宽扁的表情（如 2333）才不会被压窄
+          imageTotalWidth += size * part.ratio;
+          if (size > imageMaxSize) {
+            imageMaxSize = size;
+          }
         }
       }
+      return Size(
+        textPainter.width + imageTotalWidth,
+        textPainter.height > imageMaxSize ? textPainter.height : imageMaxSize,
+      );
+    } finally {
+      textPainter.dispose();
     }
-    return Size(
-      textPainter.width + imageTotalWidth,
-      textPainter.height > imageMaxSize ? textPainter.height : imageMaxSize,
-    );
   }
 
   static ui.Paragraph generateParagraph(
@@ -271,7 +287,8 @@ class Utils {
         // 文字里混的系统 emoji 单独降一档字号（它不是图片，走字体渲染）
         for (final run in _splitEmojiRuns(part.text ?? "")) {
           if (run.isEmoji) {
-            builder.pushStyle(ui.TextStyle(fontSize: fontSize * _kEmojiFontScale));
+            builder
+                .pushStyle(ui.TextStyle(fontSize: fontSize * _kEmojiFontScale));
             builder.addText(run.text);
             builder.pop();
           } else {

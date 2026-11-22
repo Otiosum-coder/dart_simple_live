@@ -47,29 +47,19 @@ class ScrollDanmakuPainter extends CustomPainter {
       final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
       final Canvas pictureCanvas = Canvas(pictureRecorder);
 
-      for (var item in scrollDanmakuItems) {
-        item.lastDrawTick ??= item.creationTime;
-        final endPosition = -item.width;
-        final distance = startPosition - endPosition;
-        item.xPosition =
-            item.xPosition +
-            (((item.lastDrawTick! - tick) / totalDuration) * distance);
+      try {
+        for (var item in scrollDanmakuItems) {
+          item.lastDrawTick ??= item.creationTime;
+          final endPosition = -item.width;
+          final distance = startPosition - endPosition;
+          item.xPosition = item.xPosition +
+              (((item.lastDrawTick! - tick) / totalDuration) * distance);
 
-        if (item.xPosition < -item.width || item.xPosition > size.width) {
-          continue;
-        }
+          if (item.xPosition < -item.width || item.xPosition > size.width) {
+            continue;
+          }
 
-        item.paragraph ??= Utils.generateParagraph(
-          item.content,
-          size.width,
-          fontSize,
-          fontWeight,
-          1.25,
-          fontFamily,
-        );
-
-        if (showStroke) {
-          item.strokeParagraph ??= Utils.generateStrokeParagraph(
+          item.paragraph ??= Utils.generateParagraph(
             item.content,
             size.width,
             fontSize,
@@ -77,44 +67,62 @@ class ScrollDanmakuPainter extends CustomPainter {
             1.25,
             fontFamily,
           );
-          if (item.strokeParagraph != null) {
-            pictureCanvas.drawParagraph(
-              item.strokeParagraph!,
-              Offset(item.xPosition, item.yPosition),
+
+          if (showStroke) {
+            item.strokeParagraph ??= Utils.generateStrokeParagraph(
+              item.content,
+              size.width,
+              fontSize,
+              fontWeight,
+              1.25,
+              fontFamily,
+            );
+            if (item.strokeParagraph != null) {
+              pictureCanvas.drawParagraph(
+                item.strokeParagraph!,
+                Offset(item.xPosition, item.yPosition),
+              );
+            }
+          }
+
+          if (item.content.selfSend) {
+            pictureCanvas.drawRect(
+              Offset(item.xPosition, item.yPosition).translate(-2, 2) &
+                  (Size(item.width, item.height) + const Offset(4, 0)),
+              selfSendPaint,
             );
           }
-        }
 
-        if (item.content.selfSend) {
-          pictureCanvas.drawRect(
-            Offset(item.xPosition, item.yPosition).translate(-2, 2) &
-                (Size(item.width, item.height) + const Offset(4, 0)),
-            selfSendPaint,
+          final offset = Offset(item.xPosition, item.yPosition);
+          pictureCanvas.drawParagraph(item.paragraph!, offset);
+          Utils.drawEmojiImages(
+            pictureCanvas,
+            item.paragraph!,
+            item.content,
+            offset,
+            emojiImageCache,
           );
+          item.lastDrawTick = tick;
         }
 
-        final offset = Offset(item.xPosition, item.yPosition);
-        pictureCanvas.drawParagraph(item.paragraph!, offset);
-        Utils.drawEmojiImages(
-          pictureCanvas,
-          item.paragraph!,
-          item.content,
-          offset,
-          emojiImageCache,
-        );
-        item.lastDrawTick = tick;
+        final ui.Picture picture = pictureRecorder.endRecording();
+        try {
+          canvas.drawPicture(picture);
+        } finally {
+          picture.dispose();
+        }
+      } finally {
+        if (pictureRecorder.isRecording) {
+          pictureRecorder.endRecording().dispose();
+        }
       }
-
-      final ui.Picture picture = pictureRecorder.endRecording();
-      canvas.drawPicture(picture);
     } else {
       // 弹幕数量较少时直接绘制 (节约创建 canvas 的开销)
       for (var item in scrollDanmakuItems) {
         item.lastDrawTick ??= item.creationTime;
         final endPosition = -item.width;
         final distance = startPosition - endPosition;
-        item.xPosition =
-            item.xPosition +
+        item.xPosition = item.xPosition +
             (((item.lastDrawTick! - tick) / totalDuration) * distance);
 
         if (item.xPosition < -item.width || item.xPosition > size.width) {

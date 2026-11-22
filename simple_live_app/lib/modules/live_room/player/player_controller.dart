@@ -19,23 +19,31 @@ import 'package:simple_live_app/app/controller/base_controller.dart';
 import 'package:simple_live_app/app/custom_throttle.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/utils.dart';
-import 'package:wakelock_plus/wakelock_plus.dart';
+import 'player_wakelock_coordinator.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:simple_live_app/widgets/danmaku_input_bar.dart';
 
 mixin PlayerMixin {
+  bool get embedded => false;
+  bool get playerClosing => false;
   GlobalKey<VideoState> globalPlayerKey = GlobalKey<VideoState>();
   GlobalKey globalDanmuKey = GlobalKey();
 
   /// 播放器实例
-  late final player = Player(
-    configuration: PlayerConfiguration(
-      title: "Simple Live Player",
-      logLevel: AppSettingsController.instance.logEnable.value
-          ? MPVLogLevel.info
-          : MPVLogLevel.error,
-    ),
-  );
+  bool _playerCreated = false;
+  late final player = _createPlayer();
+  Player _createPlayer() {
+    final instance = Player(
+      configuration: PlayerConfiguration(
+        title: "Simple Live Player",
+        logLevel: AppSettingsController.instance.logEnable.value
+            ? MPVLogLevel.info
+            : MPVLogLevel.error,
+      ),
+    );
+    _playerCreated = true;
+    return instance;
+  }
 
   /// 初始化播放器并设置 ao 参数
   Future<void> initializePlayer() async {
@@ -234,6 +242,7 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
 
   /// 初始化一些系统状态
   void initSystem() async {
+    if (embedded || playerClosing) return;
     if (Platform.isAndroid || Platform.isIOS) {
       VolumeController.instance.showSystemUI = false;
     }
@@ -252,6 +261,7 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
 
   /// 释放一些系统状态
   Future resetSystem() async {
+    if (embedded) return;
     _pipSubscription?.cancel();
     //pip.dispose();
     await SystemChrome.setEnabledSystemUIMode(
@@ -269,11 +279,12 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
       }
     }
 
-    await WakelockPlus.disable();
+
   }
 
   /// 进入全屏
   void enterFullScreen() {
+    if (embedded || playerClosing) return;
     fullScreenState.value = true;
     // 进出全屏一律复位锁定态与全屏输入框，避免“锁一次一直锁”/输入框残留
     lockControlsState.value = false;
@@ -293,6 +304,7 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
 
   /// 退出全屏
   void exitFull() {
+    if (embedded || playerClosing) return;
     if (Platform.isAndroid || Platform.isIOS) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge,
           overlays: SystemUiOverlay.values);
@@ -315,6 +327,7 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
 
   ///小窗模式()
   void enterSmallWindow() async {
+    if (embedded || playerClosing) return;
     if (!(Platform.isAndroid || Platform.isIOS)) {
       fullScreenState.value = true;
       smallWindowState.value = true;
@@ -438,6 +451,7 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   bool danmakuStateBeforePIP = false;
 
   Future enablePIP() async {
+    if (embedded || playerClosing) return;
     if (!Platform.isAndroid) {
       return;
     }
@@ -542,6 +556,7 @@ mixin PlayerGestureControlMixin
 
   /// 竖向手势开始
   void onVerticalDragStart(DragStartDetails details) async {
+    if (embedded || playerClosing) return;
     if (lockControlsState.value && fullScreenState.value) {
       return;
     }
@@ -571,6 +586,7 @@ mixin PlayerGestureControlMixin
 
   /// 竖向手势更新
   void onVerticalDragUpdate(DragUpdateDetails e) async {
+    if (embedded || playerClosing) return;
     if (lockControlsState.value && fullScreenState.value) {
       return;
     }
@@ -593,6 +609,7 @@ mixin PlayerGestureControlMixin
   int lastVolume = -1; // it's ok to be -1
 
   void setGestureVolume(double dy) {
+    if (embedded || playerClosing) return;
     double value = 0.0;
     double seek;
     if (dy > verStartPosition) {
@@ -630,6 +647,7 @@ mixin PlayerGestureControlMixin
   }
 
   void setGestureBrightness(double dy) {
+    if (embedded || playerClosing) return;
     double value = 0.0;
     if (dy > verStartPosition) {
       value = ((dy - verStartPosition) / (Get.height * 0.5));
@@ -675,14 +693,32 @@ class PlayerController extends BaseController
         PlayerSystemMixin,
         PlayerGestureControlMixin,
         WindowListener {
+  PlayerController({this.embedded = false});
+  @override
+  final bool embedded;
+  @override
+  bool get playerClosing => _playerClosing;
+  bool _playerClosing = false;
+  bool _playerInitialized = false;
+  Future<void>? _playerCloseFuture;
+  final Set<Future<void>> _nativeOperations = {};
+  Future<void> runPlayerOperation(Future<void> Function() action) async {
+    if (playerClosing || isClosed) return;
+    final operation = action();
+    _nativeOperations.add(operation);
+    try { await operation; } finally { _nativeOperations.remove(operation); }
+  }
+
   @override
   void onInit() {
+    if (playerClosing || isClosed || _playerInitialized) return;
+    _playerInitialized = true;
     initSystem();
     initStream();
     //设置音量
-    player.setVolume(AppSettingsController.instance.playerVolume.value);
+    if (!embedded) player.setVolume(AppSettingsController.instance.playerVolume.value);
     // 桌面端：监听窗口全屏变化（F11 / ESC / 双击标题栏），同步 App 的全屏状态
-    if (!Platform.isAndroid && !Platform.isIOS) {
+    if (!embedded && !Platform.isAndroid && !Platform.isIOS) {
       windowManager.addListener(this);
     }
     super.onInit();
@@ -706,7 +742,7 @@ class PlayerController extends BaseController
   }
 
   /// 起播计时：open 前设置，首帧（宽或高首次非空）时打印耗时
-  static Stopwatch? firstFrameWatch;
+  Stopwatch? firstFrameWatch;
 
   StreamSubscription<String>? _errorSubscription;
   StreamSubscription? _completedSubscription;
@@ -728,8 +764,9 @@ class PlayerController extends BaseController
     });
 
     _playingSubscription = player.stream.playing.listen((event) {
+      if (playerClosing) return;
+      unawaited(PlayerWakelockCoordinator.instance.setActive(this, event));
       if (event) {
-        WakelockPlus.enable();
         Log.d("Playing");
       }
     });
@@ -760,22 +797,24 @@ class PlayerController extends BaseController
     });
   }
 
-  void disposeStream() {
-    _errorSubscription?.cancel();
-    _completedSubscription?.cancel();
-    _widthSubscription?.cancel();
-    _heightSubscription?.cancel();
-    _logSubscription?.cancel();
-    _pipSubscription?.cancel();
-    _playingSubscription?.cancel();
+  Future<void> disposeStream() async {
+    await Future.wait([
+      if (_errorSubscription != null) _errorSubscription!.cancel(),
+      if (_completedSubscription != null) _completedSubscription!.cancel(),
+      if (_widthSubscription != null) _widthSubscription!.cancel(),
+      if (_heightSubscription != null) _heightSubscription!.cancel(),
+      if (_logSubscription != null) _logSubscription!.cancel(),
+      if (_pipSubscription != null) _pipSubscription!.cancel(),
+      if (_playingSubscription != null) _playingSubscription!.cancel(),
+    ]);
   }
 
   void mediaEnd() {
-    WakelockPlus.disable();
+    unawaited(PlayerWakelockCoordinator.instance.setActive(this, false));
   }
 
   void mediaError(String error) {
-    WakelockPlus.disable();
+    unawaited(PlayerWakelockCoordinator.instance.setActive(this, false));
   }
 
   void showDebugInfo() {
@@ -877,19 +916,31 @@ class PlayerController extends BaseController
     );
   }
 
-  @override
-  void onClose() async {
+  Future<void> closePlayer() {
+    if (_playerCloseFuture != null) return _playerCloseFuture!;
+    _playerClosing = true;
+    return _playerCloseFuture = _closePlayer();
+  }
+  Future<void> _closePlayer() async {
     Log.w("播放器关闭");
-    if (!Platform.isAndroid && !Platform.isIOS) {
-      windowManager.removeListener(this);
+    if (_playerInitialized && !embedded && !Platform.isAndroid && !Platform.isIOS) windowManager.removeListener(this);
+    if (!embedded && smallWindowState.value) exitSmallWindow();
+    hideControlsTimer?.cancel();
+    hidevolumeTimer?.cancel();
+    hideSeekTipTimer?.cancel();
+    try {
+      await disposeStream();
+      disposeDanmakuController();
+      await PlayerWakelockCoordinator.instance.setActive(this, false);
+      if (_playerInitialized) await resetSystem();
+    } finally {
+      await Future.wait(_nativeOperations.map((f) => f.then((_) {}, onError: (Object _, StackTrace __) {})));
+      if (_playerCreated) await player.dispose();
     }
-    if (smallWindowState.value) {
-      exitSmallWindow();
-    }
-    disposeStream();
-    disposeDanmakuController();
-    await resetSystem();
-    await player.dispose();
+  }
+  @override
+  void onClose() {
+    unawaited(closePlayer());
     super.onClose();
   }
 }

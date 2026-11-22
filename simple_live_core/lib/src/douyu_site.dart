@@ -21,6 +21,7 @@ import 'package:simple_live_core/src/model/live_play_quality.dart';
 import 'package:simple_live_core/src/model/live_category_result.dart';
 import 'package:html_unescape/html_unescape.dart';
 import 'package:simple_live_core/src/scripts/douyu_sign.dart';
+import 'package:simple_live_core/src/common/douyu_passport.dart';
 
 class DouyuSite implements LiveSite {
   @override
@@ -73,6 +74,49 @@ class DouyuSite implements LiveSite {
 
   /// 是否已登录
   bool get isLoggedIn => cookie.isNotEmpty;
+
+  /// 设备 id（dy_did），续期时使用；由 App 在 setSite() 注入
+  String deviceId = "";
+
+  /// 播放 token（acf_jwt_token）过期时的续期回调，由 App 注入。
+  /// 为空表示不自动续期（例如手动粘贴 Cookie 缺 LTP0 时）。
+  Future<String?> Function()? onCookieExpired;
+
+  /// 并发续期去重：多个取流请求同时触发时，只发一次续期
+  Future<String?>? _renewInFlight;
+
+  /// 取流前检查播放 token：临近过期就让 App 用 LTP0 静默续期。
+  /// 续期失败保留旧 Cookie、不登出，交给播放重试 / 切线路兜底。
+  Future<void> _ensureFreshCookie() async {
+    if (cookie.trim().isEmpty) return;
+    if (!DouyuPassport.isCookieExpired(cookie)) return;
+    var renew = onCookieExpired;
+    if (renew == null) return;
+    var pending = _renewInFlight;
+    if (pending == null) {
+      pending = _doRenew(renew);
+      _renewInFlight = pending;
+    }
+    try {
+      await pending;
+    } catch (_) {
+      // _doRenew 内部已吞异常，这里再兜一层
+    }
+  }
+
+  Future<String?> _doRenew(Future<String?> Function() renew) async {
+    try {
+      var fresh = await renew();
+      if (fresh != null && fresh.isNotEmpty) {
+        cookie = fresh;
+      }
+      return fresh;
+    } catch (_) {
+      return null;
+    } finally {
+      _renewInFlight = null;
+    }
+  }
 
   /// 统一构造请求头，登录后自动带上 Cookie
   ///
@@ -183,6 +227,7 @@ class DouyuSite implements LiveSite {
   Future<List<LivePlayQuality>> getPlayQualites({
     required LiveRoomDetail detail,
   }) async {
+    await _ensureFreshCookie();
     var data = await _freshPlayArgs(detail.roomId, detail.data.toString());
     data += "&cdn=&rate=-1&ver=Douyu_223061205&iar=1&ive=1&hevc=0&fa=0";
     List<LivePlayQuality> qualities = [];
@@ -224,6 +269,7 @@ class DouyuSite implements LiveSite {
     required LiveRoomDetail detail,
     required LivePlayQuality quality,
   }) async {
+    await _ensureFreshCookie();
     // 关键：每次取流都重新生成签名参数，避免用几分钟前过期的旧签名
     var args = await _freshPlayArgs(detail.roomId, detail.data.toString());
     var data = quality.data as DouyuPlayData;
@@ -231,13 +277,15 @@ class DouyuSite implements LiveSite {
     // 并发请求各 CDN 的取流地址。
     // 串行时每个请求最多等 20 秒，网络/代理一挂就要等 1 分钟以上（界面表现为"突然没线路了"）；
     // 并发后整体最多 20 秒。失败的那条直接跳过，不影响其它线路。
-    var results = await Future.wait(data.cdns.map((item) async {
-      try {
-        return await getPlayUrl(detail.roomId, args, data.rate, item);
-      } catch (_) {
-        return "";
-      }
-    }));
+    var results = await Future.wait(
+      data.cdns.map((item) async {
+        try {
+          return await getPlayUrl(detail.roomId, args, data.rate, item);
+        } catch (_) {
+          return "";
+        }
+      }),
+    );
     List<String> urls = results.where((e) => e.isNotEmpty).toList();
     // 追加一条「音频线路」：斗鱼 CDN 支持 &only-audio=1，只下发音频
     // （实测 4 秒下载量 2749KB → 63KB，约 5.5Mbps → 126kbps）
@@ -250,7 +298,9 @@ class DouyuSite implements LiveSite {
     // 拉流请求同样要带登录态：未登录时 CDN 会在 10 分钟后掐断原画/蓝光
     return LivePlayUrl(
       urls: urls,
-      headers: requestHeaders(referer: "https://www.douyu.com/${detail.roomId}"),
+      headers: requestHeaders(
+        referer: "https://www.douyu.com/${detail.roomId}",
+      ),
       audioLineIndex: audioLineIndex,
     );
   }
@@ -269,7 +319,14 @@ class DouyuSite implements LiveSite {
       formUrlEncoded: true,
     );
 
-    return "${result["data"]["rtmp_url"]}/${HtmlUnescape().convert(result["data"]["rtmp_live"].toString())}";
+    var url =
+        "${result["data"]["rtmp_url"]}/${HtmlUnescape().convert(result["data"]["rtmp_live"].toString())}";
+    // 借鉴上游：ws 线路（fcdn=ws）带 expire=300 的地址几分钟就会被 CDN 掐断，
+    // 追加 expire=0 让服务端不按该过期时间断流。
+    if (url.contains("expire=300") && url.contains("fcdn=ws")) {
+      url += "&expire=0";
+    }
+    return url;
   }
 
   @override
@@ -301,8 +358,10 @@ class DouyuSite implements LiveSite {
   @override
   Future<LiveRoomDetail> getRoomDetail({required String roomId}) async {
     Map roomInfo;
+    bool isLive;
     try {
       roomInfo = await _getRoomInfo(roomId);
+      isLive = _parseRoomLiveStatus(roomInfo);
     } catch (e) {
       // 房间不存在：返回空详情，界面显示「该直播间已失效或不存在」
       if (e is CoreError && e.statusCode == 404) {
@@ -336,8 +395,6 @@ class DouyuSite implements LiveSite {
     );
     var crptext = json.decode(jsEncResult)["data"]["room$roomId"].toString();
 
-    var isLive = roomInfo["show_status"] == 1 && roomInfo["videoLoop"] != 1;
-
     return LiveRoomDetail(
       cover: roomInfo["room_pic"].toString(),
       online: int.tryParse(roomInfo["room_biz_all"]["hot"].toString()) ?? 0,
@@ -366,7 +423,7 @@ class DouyuSite implements LiveSite {
       ),
       data: DouyuSign.getSign(crptext, roomInfo["room_id"].toString()),
       url: "https://www.douyu.com/$roomId",
-      isRecord: roomInfo["videoLoop"] == 1,
+      isRecord: int.tryParse(roomInfo["videoLoop"].toString()) == 1,
       showTime: isLive ? showTime : null,
       lastLiveTime: isLive ? null : showTime,
     );
@@ -404,22 +461,28 @@ class DouyuSite implements LiveSite {
     return LiveSearchRoomResult(hasMore: hasMore, items: items);
   }
 
+  bool _parseRoomLiveStatus(Map roomInfo) {
+    var showStatus = int.tryParse(roomInfo["show_status"]?.toString() ?? "");
+    var videoLoop = int.tryParse(roomInfo["videoLoop"]?.toString() ?? "");
+    // betard 的 1 表示开播、2 表示下播；兼容原有的 0，但不把未知值当下播。
+    if ((showStatus != 0 && showStatus != 1 && showStatus != 2) ||
+        (videoLoop != 0 && videoLoop != 1)) {
+      throw FormatException("斗鱼房间状态字段缺失或无效");
+    }
+    return showStatus == 1 && videoLoop == 0;
+  }
+
   Future<Map> _getRoomInfo(String roomId) async {
     var result = await HttpClient.instance.getJson(
       "https://www.douyu.com/betard/$roomId",
       queryParameters: {},
       header: requestHeaders(referer: 'https://www.douyu.com/$roomId'),
     );
-    try {
-      // betard 的 content-type 是 text/html，getJson 会原样返回字符串
-      if (result is String) {
-        return json.decode(result)["room"];
-      }
-      return result["room"];
-    } on FormatException {
-      // 房间不存在时斗鱼返回的是 HTML 错误页，解析必然失败
-      throw CoreError("房间不存在", statusCode: 404);
+    // betard 的 content-type 是 text/html，getJson 会原样返回字符串
+    if (result is String) {
+      return json.decode(result)["room"];
     }
+    return result["room"];
   }
 
   //生成指定长度的16进制随机字符串
@@ -476,7 +539,7 @@ class DouyuSite implements LiveSite {
     try {
       // betard 一次就能拿到直播状态 + 开播时间（未开播时 show_time 是上一场的）
       var roomInfo = await _getRoomInfo(roomId);
-      var isLive = roomInfo["show_status"] == 1 && roomInfo["videoLoop"] != 1;
+      var isLive = _parseRoomLiveStatus(roomInfo);
       var showTime = LiveDuration.parse(roomInfo["show_time"]);
       return LiveRoomStatus(
         roomId: roomInfo["room_id"]?.toString() ?? roomId,
@@ -486,11 +549,17 @@ class DouyuSite implements LiveSite {
       );
     } catch (e) {
       CoreLog.error(e);
-      // 404 = 房间不存在（斗鱼返回的是 HTML 错误页）
+      if (e is CoreError && e.statusCode == 404) {
+        return LiveRoomStatus(
+          roomId: roomId,
+          isLive: false,
+          roomNotFound: true,
+        );
+      }
       return LiveRoomStatus(
         roomId: roomId,
         isLive: false,
-        roomNotFound: e is CoreError && e.statusCode == 404,
+        querySucceeded: false,
       );
     }
   }
@@ -498,7 +567,7 @@ class DouyuSite implements LiveSite {
   @override
   Future<bool> getLiveStatus({required String roomId}) async {
     var roomInfo = await _getRoomInfo(roomId);
-    return roomInfo["show_status"] == 1 && roomInfo["videoLoop"] != 1;
+    return _parseRoomLiveStatus(roomInfo);
   }
 
   int parseHotNum(String hn) {

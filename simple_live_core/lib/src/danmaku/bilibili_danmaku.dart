@@ -174,8 +174,7 @@ class BiliBiliDanmaku implements LiveDanmaku {
       _roomEmojiMap = map;
       _roomEmojiUrls = roomUrls;
       CoreLog.d(
-        "B站房间表情：拉取到 ${map.length} 个表情（roomId=${args.roomId}）："
-        "${map.keys.take(120).join(" ")}",
+        "B站房间表情：拉取到 ${map.length} 个表情（roomId=${args.roomId}）",
       );
     } catch (e) {
       CoreLog.d("B站房间表情：拉取失败 $e");
@@ -251,7 +250,6 @@ class BiliBiliDanmaku implements LiveDanmaku {
       }),
       7,
     );
-    CoreLog.d("B站弹幕：发送 join 包（${joinData.length} 字节）");
     webScoketUtils?.sendMessage(joinData);
   }
 

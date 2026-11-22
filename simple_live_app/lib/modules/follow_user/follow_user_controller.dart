@@ -8,7 +8,6 @@ import 'package:simple_live_app/app/controller/base_controller.dart';
 import 'package:simple_live_app/app/event_bus.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/sites.dart';
-import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/follow_user_tag.dart';
 import 'package:simple_live_app/services/db_service.dart';
@@ -34,17 +33,42 @@ class FollowPlatformFilter {
   bool get isAll => siteId == null;
 }
 
+enum FollowFilterType { all, special, live, offline, tag }
+
+/// 固定筛选与用户标签使用不同身份，不依赖显示名称区分。
+class FollowFilterOption {
+  final FollowFilterType type;
+  final FollowUserTag? userTag;
+
+  const FollowFilterOption(this.type, {this.userTag});
+
+  String get key => type == FollowFilterType.tag
+      ? 'tag:${userTag!.id}'
+      : 'filter:${type.name}';
+
+  String get label => switch (type) {
+        FollowFilterType.all => '全部',
+        FollowFilterType.special => '特别关注',
+        FollowFilterType.live => '直播中',
+        FollowFilterType.offline => '未开播',
+        FollowFilterType.tag => userTag!.tag,
+      };
+}
+
 class FollowUserController extends BasePageController<FollowUser> {
   StreamSubscription<dynamic>? onUpdatedIndexedStream;
   StreamSubscription<dynamic>? onUpdatedListStream;
 
-  /// 0:全部 1:直播中 2:未直播
-  var filterMode = FollowUserTag(id: "0", tag: "全部", userId: []).obs;
-  RxList<FollowUserTag> tagList = [
-    FollowUserTag(id: "0", tag: "全部", userId: []),
-    FollowUserTag(id: "1", tag: "直播中", userId: []),
-    FollowUserTag(id: "2", tag: "未开播", userId: []),
-  ].obs;
+  static const _fixedFilters = [
+    FollowFilterOption(FollowFilterType.all),
+    FollowFilterOption(FollowFilterType.special),
+    FollowFilterOption(FollowFilterType.live),
+    FollowFilterOption(FollowFilterType.offline),
+  ];
+
+  var filterMode = _fixedFilters.first.obs;
+  RxList<FollowFilterOption> tagList = _fixedFilters.toList().obs;
+  Worker? _followTagsWorker;
 
   // 用户自定义标签
   RxList<FollowUserTag> userTagList = <FollowUserTag>[].obs;
@@ -72,6 +96,11 @@ class FollowUserController extends BasePageController<FollowUser> {
         FollowService.instance.updatedListStream.listen((event) {
       filterData();
     });
+    _followTagsWorker = ever<List<FollowUserTag>>(
+      FollowService.instance.followTagList,
+      (_) => filterData(),
+    );
+    updateTagList();
     super.onInit();
   }
 
@@ -142,18 +171,16 @@ class FollowUserController extends BasePageController<FollowUser> {
 
   /// 当前筛选（状态/标签 + 平台）后的列表
   List<FollowUser> filteredList() {
-    Iterable<FollowUser> src;
-    var tag = filterMode.value.tag;
-    if (tag == "全部") {
-      src = FollowService.instance.followList;
-    } else if (tag == "直播中") {
-      src = FollowService.instance.liveList;
-    } else if (tag == "未开播") {
-      src = FollowService.instance.notLiveList;
-    } else {
-      FollowService.instance.filterDataByTag(filterMode.value);
-      src = FollowService.instance.curTagFollowList;
-    }
+    final service = FollowService.instance;
+    final filter = filterMode.value;
+    final Iterable<FollowUser> src = switch (filter.type) {
+      FollowFilterType.all => service.followList,
+      FollowFilterType.special => service.followList.where((item) => item.isSpecial),
+      FollowFilterType.live => service.liveList,
+      FollowFilterType.offline => service.notLiveList,
+      FollowFilterType.tag => service.followList
+          .where((item) => filter.userTag!.userId.contains(item.id)),
+    };
     var siteId = platformFilter.value;
     return siteId == null
         ? src.toList()
@@ -163,16 +190,21 @@ class FollowUserController extends BasePageController<FollowUser> {
   void updateTagList() {
     updatePlatformList();
     userTagList.assignAll(FollowService.instance.followTagList);
-    tagList.value = tagList.take(3).toList();
-    for (var i in userTagList) {
-      if (!tagList.contains(i)) {
-        tagList.add(i);
-      }
-    }
+    final selectedKey = filterMode.value.key;
+    tagList.assignAll([
+      ..._fixedFilters,
+      for (final tag in userTagList)
+        FollowFilterOption(FollowFilterType.tag, userTag: tag),
+    ]);
+    // 标签被删除或导入替换后回到全部；重命名时保留同一标签。
+    filterMode.value = tagList.firstWhere(
+      (option) => option.key == selectedKey,
+      orElse: () => _fixedFilters.first,
+    );
   }
 
   void filterData() {
-    updatePlatformList();
+    updateTagList();
     list.assignAll(filteredList());
     // 列表数据变了就同步空态标记。
     // 导入关注文件、取消关注、切标签/平台都会走到这里，
@@ -180,65 +212,14 @@ class FollowUserController extends BasePageController<FollowUser> {
     pageEmpty.value = list.isEmpty;
   }
 
-  void setFilterMode(FollowUserTag tag) {
+  void setFilterMode(FollowFilterOption tag) {
     filterMode.value = tag;
     filterData();
-  }
-
-  void removeItem(FollowUser item) async {
-    var result =
-    await Utils.showAlertDialog("确定要取消关注${item.userName}吗?", title: "取消关注");
-    if (!result) {
-      return;
-    }
-    // 取消关注：从所有自定义标签里移除该 id
-    for (var tag in tagList) {
-      if (tag.tag == "全部") {
-        continue;
-      }
-      if (tag.userId.remove(item.id)) {
-        updateTag(tag);
-      }
-    }
-    await DBService.instance.followBox.delete(item.id);
-    // 只从内存里摘掉这一条再重排，不重新拉全部主播的直播状态。
-    // 以前这里走 refreshData()，会触发 FollowService.loadData() 的
-    // startUpdateStatus()，把整个关注列表的直播状态重新请求一遍。
-    FollowService.instance.followList.removeWhere((e) => e.id == item.id);
-    // filterData 内部会重排并通知列表刷新（updatedListStream）
-    FollowService.instance.filterData();
-    updateTagList();
   }
 
   void updateItem(FollowUser item){
     FollowService.instance.addFollow(item);
   }
-  /// 保存主播的标签（多选）
-  ///
-  /// [selected] 是标签名列表，空表示不属于任何自定义标签。
-  /// 成员关系以各标签的 userId 为准；FollowUser.tag 只保留第一个标签，
-  /// 用于兼容导出/导入和旧数据。
-  void setItemTags(FollowUser item, List<String> selected) {
-    for (var tag in tagList) {
-      if (tag.tag == "全部") {
-        continue;
-      }
-      var want = selected.contains(tag.tag);
-      var had = tag.userId.contains(item.id);
-      if (want && !had) {
-        tag.userId.add(item.id);
-      } else if (!want && had) {
-        tag.userId.remove(item.id);
-      }
-      if (want != had) {
-        updateTag(tag);
-      }
-    }
-    item.tag = selected.isEmpty ? "全部" : selected.first;
-    updateItem(item);
-    filterData();
-  }
-
   Future<void> removeTag(FollowUserTag tag) async {
     // 将tag下的所有follow设置为全部
     for(var i in tag.userId){
@@ -272,7 +253,7 @@ class FollowUserController extends BasePageController<FollowUser> {
       return;
     }
     // 避免重名
-    if (tagList.any((item) => item.tag == newTagName)) {
+    if (userTagList.any((item) => item.tag == newTagName)) {
       SmartDialog.showToast("标签名重复，修改失败");
       return;
     }
@@ -291,18 +272,19 @@ class FollowUserController extends BasePageController<FollowUser> {
   }
 
   // 调整标签顺序
-  void updateTagOrder(int oldIndex, int newIndex) {
+  void updateTagOrder(int oldIndex, int newIndex) async {
     if (newIndex > oldIndex) newIndex -= 1; // 处理索引调整
     final item = userTagList.removeAt(oldIndex);
     userTagList.insert(newIndex, item);
-    tagList.value = tagList.take(3).toList();
-    tagList.addAll(userTagList);
-    DBService.instance.updateFollowTagOrder(userTagList);
+    await DBService.instance.updateFollowTagOrder(userTagList.toList());
+    FollowService.instance.getAllTagList();
   }
 
   @override
   void onClose() {
     onUpdatedIndexedStream?.cancel();
+    onUpdatedListStream?.cancel();
+    _followTagsWorker?.dispose();
     super.onClose();
   }
 }

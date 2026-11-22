@@ -6,6 +6,8 @@ import 'package:simple_live_app/modules/category/detail/category_detail_page.dar
 import 'package:simple_live_app/modules/indexed/indexed_controller.dart';
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
 import 'package:simple_live_app/modules/live_room/live_room_page.dart';
+import 'package:simple_live_app/modules/multi_live/integration/multi_live_route.dart';
+import 'package:simple_live_app/modules/multi_live/session/multi_live_room_spec.dart';
 import 'package:simple_live_app/modules/settings/follow_settings_page.dart';
 import 'package:simple_live_app/modules/sync/remote_sync/webdav/remote_sync_webdav_config_page.dart';
 import 'package:simple_live_app/modules/sync/remote_sync/webdav/remote_sync_webdav_controller.dart';
@@ -112,6 +114,13 @@ class AppPages {
           pRoomId: Get.parameters["roomId"] ?? "",
         ),
       ),
+    ),
+    GetPage(
+      name: RoutePath.kMultiLive,
+      page: () {
+        final args = Get.arguments;
+        return MultiLiveRoute(initialRoom: args is MultiLiveRoomSpec ? args : null);
+      },
     ),
     //弹幕设置
     GetPage(

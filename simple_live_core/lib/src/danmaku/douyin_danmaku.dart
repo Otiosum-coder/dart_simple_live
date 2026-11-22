@@ -99,7 +99,6 @@ class DouyinDanmaku implements LiveDanmaku {
 
     var url = "$uri&signature=$sign";
     var backupUrl = url.replaceAll("webcast3-ws-web-lq", "webcast5-ws-web-lf");
-    print(url);
     // 重连/刷新时会再次调用 start()：必须先关闭旧连接，
     // 否则旧 socket 仍在接收消息 → 聊天列表和滚动弹幕都会重复出现
     webScoketUtils?.close();
@@ -206,30 +205,56 @@ class DouyinDanmaku implements LiveDanmaku {
     if (!chatMessage.hasRtfContent()) {
       return spans;
     }
-    for (final piece in chatMessage.rtfContent.piecesList) {
+    final rtf = chatMessage.rtfContent;
+    for (final piece in rtf.piecesList) {
       if (piece.hasImageValue() && piece.imageValue.hasImage()) {
-        final imageUrl = _extractImageUrl(piece.imageValue.image);
+        final image = piece.imageValue.image;
+        final imageUrl = _extractImageUrl(image);
         if (imageUrl != null) {
-          spans.add(LiveMessageSpan.image(imageUrl));
+          spans.add(
+            LiveMessageSpan.image(
+              imageUrl,
+              imageRatio: _extractImageRatio(image),
+            ),
+          );
           continue;
         }
-        final fallback = _extractImageFallbackText(piece.imageValue.image);
+        final fallback = _extractImageFallbackText(image);
         if (fallback != null) {
           _appendTextWithEmojiFallback(spans, fallback);
         }
       }
-      if (piece.stringValue.trim().isNotEmpty) {
-        _appendTextWithEmojiFallback(spans, piece.stringValue);
-      }
+      _appendTextWithEmojiFallback(spans, piece.stringValue);
       if (piece.hasPatternRefValue()) {
-        final pattern = piece.patternRefValue.defaultPattern.trim();
-        if (pattern.isNotEmpty) {
-          _appendTextWithEmojiFallback(spans, pattern);
-        }
+        _appendTextWithEmojiFallback(
+          spans,
+          piece.patternRefValue.defaultPattern,
+        );
+      }
+    }
+    if (!spans.any(
+      (span) => span.isImage || span.text?.trim().isNotEmpty == true,
+    )) {
+      spans.clear();
+      if (rtf.defaultPatter.trim().isNotEmpty) {
+        _appendTextWithEmojiFallback(spans, rtf.defaultPatter);
       }
     }
     return spans;
   }
+
+  double? _extractImageRatio(Image image) {
+    final width = image.width.toInt();
+    final height = image.height.toInt();
+    if (width <= 0 || height <= 0) {
+      return null;
+    }
+    final ratio = width / height;
+    // 忽略异常比例，避免一张表情撑开整行。
+    return ratio >= 0.25 && ratio <= 4.0 ? ratio : null;
+  }
+
+  static final _emojiTokenPattern = RegExp(r'\[[^\[\]]{1,16}\]');
 
   /// 文本按 [xxx] 切分，能查到本地表情图就替换成图片片段
   void _appendTextWithEmojiFallback(List<LiveMessageSpan> spans, String text) {
@@ -237,13 +262,10 @@ class DouyinDanmaku implements LiveDanmaku {
       return;
     }
     var start = 0;
-    for (final match in RegExp(r'\[[^\[\]]{1,16}\]').allMatches(text)) {
-      final token = match.group(0);
-      if (token == null) {
-        continue;
-      }
-      final asset = douyinEmojiAssets[token];
+    for (final match in _emojiTokenPattern.allMatches(text)) {
+      final asset = douyinEmojiAssets[match.group(0)];
       if (asset == null) {
+        // 不移动 start，未收录的标记和周围文字一起保留。
         continue;
       }
       if (match.start > start) {

@@ -83,8 +83,6 @@ class SpecialDanmakuContentItem extends DanmakuContentItem {
   @override
   DanmakuItemType get type => DanmakuItemType.special;
 
-  TextPainter? painterCache;
-
   SpecialDanmakuContentItem(
     super.text, {
     required this.duration,
@@ -99,7 +97,7 @@ class SpecialDanmakuContentItem extends DanmakuContentItem {
     int? translationDuration,
     this.translationStartDelay = 0,
     this.easingType = Curves.linear,
-  }) : this.translationDuration = translationDuration ?? duration;
+  }) : translationDuration = translationDuration ?? duration;
 
   factory SpecialDanmakuContentItem.fromList(
     Color color,
@@ -116,7 +114,7 @@ class SpecialDanmakuContentItem extends DanmakuContentItem {
     double endA = double.tryParse(alphaString[1]) ?? 1;
     Tween<double>? alphaTween;
     if (disableGradient || startA == endA) {
-      color = color.withOpacity((startA + endA) / 2);
+      color = color.withValues(alpha: (startA + endA) / 2);
     } else {
       alphaTween = Tween(begin: startA, end: endA);
     }

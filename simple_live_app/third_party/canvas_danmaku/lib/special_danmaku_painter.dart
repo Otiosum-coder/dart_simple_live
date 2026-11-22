@@ -35,46 +35,58 @@ class SpecialDanmakuPainter extends CustomPainter {
       pictureRecorder = ui.PictureRecorder();
       pictureCanvas = Canvas(pictureRecorder);
     }
-    for (final item in specialDanmakuItems) {
-      final elapsed = tick - item.creationTime;
-      final content = item.content as SpecialDanmakuContentItem;
-      if (elapsed >= 0 && elapsed < content.duration) {
-        _paintSpecialDanmaku(pictureCanvas, content, size, elapsed);
+    try {
+      for (final item in specialDanmakuItems) {
+        final elapsed = tick - item.creationTime;
+        final content = item.content as SpecialDanmakuContentItem;
+        if (elapsed >= 0 && elapsed < content.duration) {
+          _paintSpecialDanmaku(pictureCanvas, item, size, elapsed);
+        }
       }
-    }
-    if (batch) {
-      canvas.drawPicture(pictureRecorder.endRecording());
+      if (batch) {
+        final picture = pictureRecorder.endRecording();
+        try {
+          canvas.drawPicture(picture);
+        } finally {
+          picture.dispose();
+        }
+      }
+    } finally {
+      if (batch && pictureRecorder.isRecording) {
+        pictureRecorder.endRecording().dispose();
+      }
     }
   }
 
   void _paintSpecialDanmaku(
     Canvas canvas,
-    SpecialDanmakuContentItem item,
+    DanmakuItem activeItem,
     Size size,
     int elapsed,
   ) {
+    final item = activeItem.content as SpecialDanmakuContentItem;
+    final painter = activeItem.painterCache!;
     // 透明度动画
     late final alpha =
-        item.alphaTween?.transform(elapsed / item.duration) ??
-        item.color.opacity;
+        item.alphaTween?.transform(elapsed / item.duration) ?? item.color.a;
     final color = item.alphaTween == null
         ? item.color
-        : item.color.withOpacity(alpha);
-    // 文本
-    if (color != item.painterCache?.text?.style?.color) {
-      item.painterCache!.text = TextSpan(
-        text: item.text,
-        style: TextStyle(
-          color: color,
-          fontSize: item.fontSize,
-          fontWeight: FontWeight.values[fontWeight],
-          fontFamily: fontFamily,
-          shadows: item.hasStroke
-              ? [Shadow(color: Colors.black.withOpacity(alpha), blurRadius: 2)]
-              : null,
-        ),
-      );
-      item.painterCache!.layout();
+        : item.color.withValues(alpha: alpha);
+    final style = TextStyle(
+      color: color,
+      fontSize: item.fontSize,
+      fontWeight: FontWeight.values[fontWeight],
+      fontFamily: fontFamily,
+      shadows: item.hasStroke
+          ? [
+              Shadow(
+                  color: Colors.black.withValues(alpha: alpha), blurRadius: 2)
+            ]
+          : null,
+    );
+    if (painter.text?.style != style) {
+      painter.text = TextSpan(text: item.text, style: style);
+      painter.layout();
     }
 
     // 路径动画 TODO
@@ -104,10 +116,10 @@ class SpecialDanmakuPainter extends CustomPainter {
       canvas.save();
       canvas.translate(dx, dy);
       canvas.transform(item.matrix!.storage);
-      item.painterCache!.paint(canvas, Offset.zero);
+      painter.paint(canvas, Offset.zero);
       canvas.restore();
     } else {
-      item.painterCache!.paint(canvas, Offset(dx, dy));
+      painter.paint(canvas, Offset(dx, dy));
     }
   }
 

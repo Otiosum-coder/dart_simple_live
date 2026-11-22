@@ -985,6 +985,7 @@ void showFollowUser(LiveRoomController controller) {
                 return Obx(
                   () => FollowUserItem(
                     item: item,
+                    showManageAction: false,
                     playing: controller.rxSite.value.id == item.siteId &&
                         controller.rxRoomId.value == item.roomId,
                     onTap: () {

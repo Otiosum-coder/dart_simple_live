@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:simple_live_core/src/common/core_log.dart';
+import 'package:simple_live_core/src/common/log_sanitizer.dart';
 import 'package:web_socket_channel/io.dart';
 
 enum SocketStatus {
@@ -74,12 +75,12 @@ class WebScoketUtils {
         headers: headers,
       );
 
-      CoreLog.d("WS连接中：$wsurl");
+      CoreLog.d("WS连接中：${LogSanitizer.url(wsurl)}");
       await webSocket?.ready;
-      CoreLog.d("WS已连接：$wsurl");
+      CoreLog.d("WS已连接：${LogSanitizer.url(wsurl)}");
       ready();
     } catch (e) {
-      CoreLog.d("WS连接失败：$wsurl err=$e");
+      CoreLog.d("WS连接失败：${LogSanitizer.url(wsurl)} err=${LogSanitizer.text(e)}");
       if (!retry) {
         connect(retry: true);
         return;
@@ -119,7 +120,7 @@ class WebScoketUtils {
 
   void onError(e, s) {
     status = SocketStatus.failed;
-    CoreLog.d("WS错误：$e");
+    CoreLog.d("WS错误：${LogSanitizer.text(e)}");
     onClose?.call(e.toString());
   }
 
@@ -159,7 +160,7 @@ class WebScoketUtils {
         connect();
       });
     } else {
-      CoreLog.d("WS重连超过最大次数，断开：$url");
+      CoreLog.d("WS重连超过最大次数，断开：${LogSanitizer.url(url)}");
       onClose?.call("重连超过最大次数，与服务器断开连接");
       reconnectTimer?.cancel();
       reconnectTimer = null;

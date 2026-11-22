@@ -85,7 +85,7 @@ class BiliBiliQRLoginController extends GetxController {
         });
         if (cookies.isNotEmpty) {
           var cookieStr = cookies.join(";");
-          Log.i(cookieStr);
+          Log.i("B站扫码登录：已获取登录凭证");
           BiliBiliAccountService.instance.setCookie(cookieStr);
           await BiliBiliAccountService.instance.loadUserInfo();
           Get.back();

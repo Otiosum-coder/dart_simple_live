@@ -2,12 +2,14 @@ library simple_live_core;
 
 export 'src/interface/live_site.dart';
 export 'src/interface/live_danmaku.dart';
+export 'src/interface/live_danmaku_sender_control.dart';
 export 'src/huya_site.dart';
 export 'src/bilibili_site.dart';
 export 'src/douyu_site.dart';
 export 'src/douyin_site.dart';
 export 'src/common/core_error.dart';
 export 'src/common/core_log.dart';
+export 'src/common/log_sanitizer.dart';
 export 'src/common/douyin_game_artwork.dart';
 export 'src/common/live_duration.dart';
 export 'src/model/live_message.dart';
@@ -17,6 +19,7 @@ export 'src/danmaku/huya_danmaku.dart';
 export 'src/danmaku/douyin_danmaku.dart';
 export 'src/douyin/douyin_abogus.dart';
 export 'src/douyin/douyin_qr_login.dart';
+export 'src/common/douyu_passport.dart';
 
 export 'src/model/live_category_result.dart';
 export 'src/model/live_category.dart';

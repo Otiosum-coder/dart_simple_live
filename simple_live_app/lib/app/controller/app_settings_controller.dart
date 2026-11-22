@@ -165,7 +165,10 @@ class AppSettingsController extends GetxController {
         .getValue(LocalStorageService.kUpdateFollowDuration, 10);
 
     updateFollowThreadCount.value = LocalStorageService.instance
-        .getValue(LocalStorageService.kUpdateFollowThreadCount, 0);  // 默认 0 = 自动
+        .getValue(LocalStorageService.kUpdateFollowThreadCount, 0); // 默认 0 = 自动
+
+    specialFollowNotifyEnable.value = LocalStorageService.instance
+        .getValue(LocalStorageService.kSpecialFollowNotifyEnable, false);
 
     initSiteSort();
     initHomeSort();
@@ -557,6 +560,13 @@ class AppSettingsController extends GetxController {
     videoHardwareDecoder.value = e;
     LocalStorageService.instance
         .setValue(LocalStorageService.kVideoHardwareDecoder, e);
+  }
+
+  var specialFollowNotifyEnable = false.obs;
+  Future<void> setSpecialFollowNotifyEnable(bool enabled) async {
+    await LocalStorageService.instance
+        .setValue(LocalStorageService.kSpecialFollowNotifyEnable, enabled);
+    specialFollowNotifyEnable.value = enabled;
   }
 
   var autoUpdateFollowEnable = false.obs;

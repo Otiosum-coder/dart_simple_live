@@ -220,13 +220,15 @@ class DouyuQRLoginController extends GetxController {
       if (url.isEmpty) {
         throw "登录成功，但斗鱼未返回跳转地址";
       }
+      // 先走确认跳转（appClient_json_callback）那一跳：它会把长效凭证 LTP0
+      // 写进 Set-Cookie，静默续期靠它。拿到 acf_uid + LTP0 才停。
       for (var candidate in [
-        url,
-        "$url&callback=json_callback",
         "$url&callback=appClient_json_callback",
+        "$url&callback=json_callback",
+        url,
       ]) {
         await _followRedirects(candidate);
-        if (_jar.containsKey("acf_uid")) {
+        if (_jar.containsKey("acf_uid") && _jar.containsKey("LTP0")) {
           break;
         }
       }
@@ -235,6 +237,9 @@ class DouyuQRLoginController extends GetxController {
         await _request("GET", "https://www.douyu.com/");
       }
       Log.i("斗鱼扫码登录：抓到的 Cookie 字段 [${_jar.keys.join(',')}]");
+      if (!_jar.containsKey("LTP0")) {
+        Log.i("斗鱼扫码登录：未抓到 LTP0，后续无法静默续期（过期需重新登录）");
+      }
       if (_jar.isEmpty) {
         throw "未能获取登录 Cookie，请改用「手动输入 Cookie」";
       }

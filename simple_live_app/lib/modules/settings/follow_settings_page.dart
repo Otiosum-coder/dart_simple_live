@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
+import 'package:simple_live_app/app/log.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/app_style.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/services/follow_service.dart';
+import 'package:simple_live_app/services/live_notification_service.dart';
 import 'package:simple_live_app/widgets/settings/settings_action.dart';
 import 'package:simple_live_app/widgets/settings/settings_card.dart';
 import 'package:simple_live_app/widgets/settings/settings_switch.dart';
@@ -20,6 +23,39 @@ class FollowSettingsPage extends GetView<AppSettingsController> {
       body: ListView(
         padding: AppStyle.edgeInsetsA12,
         children: [
+          SettingsCard(
+              child: Column(children: [
+            Obx(() => AbsorbPointer(
+                  absorbing: LiveNotificationService
+                      .instance.requestingPermission.value,
+                  child: SettingsSwitch(
+                    value: controller.specialFollowNotifyEnable.value,
+                    title: '特别关注开播提醒',
+                    subtitle: '为所有带星标的主播提醒开播，每分钟检查一次',
+                    onChanged: _setLiveReminders,
+                  ),
+                )),
+            AppStyle.divider,
+            Obx(() {
+              final notifications = LiveNotificationService.instance;
+              return SettingsAction(
+                title: '系统通知权限',
+                value: !notifications.ready.value
+                    ? '暂不可用'
+                    : notifications.systemManagedPermission
+                        ? '由系统管理'
+                        : notifications.permissionGranted.value
+                            ? '已允许'
+                            : '未允许',
+                onTap: notifications.openNotificationSettings,
+              );
+            }),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Text('首次检查只记录状态，不补发提醒。应用退出或被系统停止后无法继续检查。',
+                  style: TextStyle(fontSize: 12, color: Colors.grey)),
+            ),
+          ])),
           SettingsCard(
             child: Column(
               children: [
@@ -56,9 +92,8 @@ class FollowSettingsPage extends GetView<AppSettingsController> {
                 Obx(
                   () {
                     var threadCount = controller.updateFollowThreadCount.value;
-                    var displayValue = threadCount == 0
-                        ? "自动 (根据 CPU 核心数)"
-                        : "$threadCount";
+                    var displayValue =
+                        threadCount == 0 ? "自动 (根据 CPU 核心数)" : "$threadCount";
 
                     return SettingsAction(
                       title: "更新并发数",
@@ -76,6 +111,24 @@ class FollowSettingsPage extends GetView<AppSettingsController> {
         ],
       ),
     );
+  }
+
+  Future<void> _setLiveReminders(bool enabled) async {
+    final notifications = LiveNotificationService.instance;
+    if (notifications.requestingPermission.value) return;
+    try {
+      if (enabled && !await notifications.requestPermission()) {
+        SmartDialog.showToast(notifications.ready.value
+            ? '未获得通知权限，请在系统设置中允许后再开启'
+            : '当前系统通知不可用，请稍后重试');
+        return;
+      }
+      await controller.setSpecialFollowNotifyEnable(enabled);
+      FollowService.instance.initReminderTimer(resetBaseline: true);
+    } catch (error) {
+      Log.logPrint('开播提醒设置失败: $error');
+      SmartDialog.showToast('设置失败，请重试');
+    }
   }
 
   void setTimer(BuildContext context) async {

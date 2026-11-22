@@ -8,10 +8,10 @@ import 'package:simple_live_app/services/douyu_account_service.dart';
 /// 斗鱼登录方式选择：扫码登录 / Web登录 / 手动填写 Cookie
 ///
 /// 账号管理页和「未登录画质限制」提示都会用到，抽出来避免重复实现。
-void showDouyuLoginSheet() {
+Future<void> showDouyuLoginSheet() async {
   // 桌面/横屏不提供 Web 登录入口（网页太大），改用扫码 / Cookie
   var isPhone = MediaQuery.of(Get.context!).orientation == Orientation.portrait;
-  Utils.showBottomSheet(
+  final route = await Utils.showBottomSheet(
     title: "登录斗鱼",
     child: Column(
       mainAxisSize: MainAxisSize.min,
@@ -22,8 +22,7 @@ void showDouyuLoginSheet() {
           subtitle: const Text("使用斗鱼APP扫描二维码登录"),
           trailing: const Icon(Icons.chevron_right),
           onTap: () {
-            Get.back();
-            Get.toNamed(RoutePath.kDouyuQRLogin);
+            Get.back(result: RoutePath.kDouyuQRLogin);
           },
         ),
         if (isPhone)
@@ -33,8 +32,7 @@ void showDouyuLoginSheet() {
             subtitle: const Text("账号密码 / 手机验证码登录（仅移动端显示）"),
             trailing: const Icon(Icons.chevron_right),
             onTap: () {
-              Get.back();
-              Get.toNamed(RoutePath.kDouyuWebLogin);
+              Get.back(result: RoutePath.kDouyuWebLogin);
             },
           ),
         ListTile(
@@ -43,13 +41,17 @@ void showDouyuLoginSheet() {
           subtitle: const Text("手动输入Cookie登录"),
           trailing: const Icon(Icons.chevron_right),
           onTap: () {
-            Get.back();
-            showDouyuCookieDialog();
+            Get.back(result: 'cookie');
           },
         ),
       ],
     ),
   );
+  if (route == 'cookie') {
+    await showDouyuCookieDialog();
+  } else if (route is String) {
+    await Get.toNamed(route);
+  }
 }
 
 /// 手动输入斗鱼 Cookie
@@ -57,7 +59,8 @@ Future showDouyuCookieDialog() async {
   var cookie = await Utils.showEditTextDialog(
     DouyuAccountService.instance.cookie,
     title: "请输入斗鱼Cookie",
-    hintText: "粘贴 www.douyu.com 的 Cookie（需含 acf_uid / acf_dmjwt_token）",
+    hintText:
+        "粘贴 www.douyu.com 的 Cookie（需含 acf_uid / acf_dmjwt_token；要自动续期需同时含 LTP0）",
     maxLines: 5,
   );
   if (cookie == null || cookie.isEmpty) {
@@ -67,8 +70,11 @@ Future showDouyuCookieDialog() async {
   cookie = Utils.extractCookieFromText(cookie);
   DouyuAccountService.instance.setCookie(cookie);
   if (DouyuAccountService.instance.logined.value) {
-    SmartDialog.showToast(
-        "斗鱼登录成功：${DouyuAccountService.instance.name.value}");
+    SmartDialog.showToast("斗鱼登录成功：${DouyuAccountService.instance.name.value}");
+    if (!DouyuAccountService.parseCookieMap(DouyuAccountService.instance.cookie)
+        .containsKey("LTP0")) {
+      SmartDialog.showToast("未包含 LTP0，7 天后可能需重新登录");
+    }
   } else {
     SmartDialog.showToast("Cookie 里缺少 acf_uid，登录态可能不完整");
   }

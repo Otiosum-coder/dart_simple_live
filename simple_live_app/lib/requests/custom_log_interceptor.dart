@@ -17,28 +17,28 @@ class CustomLogInterceptor extends Interceptor {
         DateTime.now().millisecondsSinceEpoch - err.requestOptions.extra["ts"];
     if (!kReleaseMode) {
       Log.e('''【HTTP请求错误-${err.type}】 耗时:${time}ms
-${err.message}
+${LogSanitizer.text(err.message)}
 
 Request Method：${err.requestOptions.method}
 Response Code：${err.response?.statusCode}
-Request URL：${err.requestOptions.uri}
-Request Query：${err.requestOptions.queryParameters}
-Request Data：${err.requestOptions.data}
-Request Headers：${err.requestOptions.headers}
-Response Headers：${err.response?.headers.map}
-Response Data：${err.response?.data}''', err.stackTrace);
+Request URL：${LogSanitizer.url(err.requestOptions.uri)}
+Request Query：${LogSanitizer.requestData(err.requestOptions.uri, err.requestOptions.queryParameters)}
+Request Data：${LogSanitizer.requestData(err.requestOptions.uri, err.requestOptions.data)}
+Request Headers：${LogSanitizer.data(err.requestOptions.headers)}
+Response Headers：${LogSanitizer.data(err.response?.headers.map)}
+Response Data：${LogSanitizer.data(err.response?.data)}''', err.stackTrace);
     } else {
       CoreLog.e('''[HTTP Error] [${err.type}] [Time:${time}ms]
-${err.message}
+${LogSanitizer.text(err.message)}
 
 Request Method：${err.requestOptions.method}
 Response Code：${err.response?.statusCode}
-Request URL：${err.requestOptions.uri}
-Request Query：${err.requestOptions.queryParameters}
-Request Data：${err.requestOptions.data}
-Request Headers：${_maskHeader(err.requestOptions.headers)}
-Response Headers：${err.response?.headers.map}
-Response Data：${err.response?.data}''', err.stackTrace);
+Request URL：${LogSanitizer.url(err.requestOptions.uri)}
+Request Query：${LogSanitizer.requestData(err.requestOptions.uri, err.requestOptions.queryParameters)}
+Request Data：${LogSanitizer.requestData(err.requestOptions.uri, err.requestOptions.data)}
+Request Headers：${LogSanitizer.data(err.requestOptions.headers)}
+Response Headers：${LogSanitizer.data(err.response?.headers.map)}
+Response Data：${LogSanitizer.data(err.response?.data)}''', err.stackTrace);
     }
 
     super.onError(err, handler);
@@ -53,32 +53,19 @@ Response Data：${err.response?.data}''', err.stackTrace);
         '''【HTTP请求响应】 耗时:${time}ms
 Request Method：${response.requestOptions.method}
 Request Code：${response.statusCode}
-Request URL：${response.requestOptions.uri}
-Request Query：${response.requestOptions.queryParameters}
-Request Data：${response.requestOptions.data}
-Request Headers：${response.requestOptions.headers}
-Response Headers：${response.headers.map}
-Response Data：${response.data}''',
+Request URL：${LogSanitizer.url(response.requestOptions.uri)}
+Request Query：${LogSanitizer.requestData(response.requestOptions.uri, response.requestOptions.queryParameters)}
+Request Data：${LogSanitizer.requestData(response.requestOptions.uri, response.requestOptions.data)}
+Request Headers：${LogSanitizer.data(response.requestOptions.headers)}
+Response Headers：${LogSanitizer.data(response.headers.map)}
+Response Data：${LogSanitizer.data(response.data)}''',
       );
     } else {
       CoreLog.i(
-        "[HTTP Response] [time:${time}ms] [${response.statusCode}] ${response.requestOptions.uri}",
+        "[HTTP Response] [time:${time}ms] [${response.statusCode}] ${LogSanitizer.url(response.requestOptions.uri)}",
       );
     }
     super.onResponse(response, handler);
   }
 
-  // Header脱敏
-  String _maskHeader(Map<String, dynamic> header) {
-    var result = <String, dynamic>{};
-    header.forEach((key, value) {
-      var k = key.toLowerCase();
-      if (k == "cookie" || k == "authorization") {
-        result[key] = "******";
-      } else {
-        result[key] = value;
-      }
-    });
-    return result.toString();
-  }
 }

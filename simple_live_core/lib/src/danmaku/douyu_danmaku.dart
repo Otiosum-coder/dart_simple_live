@@ -150,7 +150,52 @@ class DouyuDanmakuArgs {
   }
 }
 
-class DouyuDanmaku implements LiveDanmaku {
+typedef DouyuSenderSocketFactory = WebScoketUtils Function({
+  required String url, required int heartBeatTime,
+  required Map<String, dynamic> headers,
+  required void Function(dynamic) onMessage,
+  required void Function() onReady, required void Function() onHeartBeat,
+  required void Function() onReconnect, required void Function(String) onClose,
+});
+
+class DouyuDanmaku implements LiveDanmaku, LiveDanmakuSenderControl {
+  DouyuDanmaku({DouyuSenderSocketFactory? senderSocketFactory,
+    this.senderPreheatDelay = const Duration(milliseconds: 1500)})
+      : _senderSocketFactory = senderSocketFactory ?? WebScoketUtils.new;
+  final DouyuSenderSocketFactory _senderSocketFactory;
+  final Duration senderPreheatDelay;
+  bool _senderActive = true;
+  int _senderGeneration = 0;
+  bool get senderActive => _senderActive;
+  bool _ownsSender(int generation) => !_stopped && _senderActive && generation == _senderGeneration;
+  @override
+  Future<void> setSenderActive(bool active) async {
+    if (_senderActive == active) return;
+    _senderActive = active;
+    _invalidateSender();
+    if (active && !_stopped) unawaited(_preheatSender());
+  }
+  void _invalidateSender() {
+    _senderGeneration++;
+    final socket = _senderSocket;
+    _senderSocket = null;
+    _senderReady = false;
+    socket?.close();
+    final login = _senderLoginCompleter;
+    _senderLoginCompleter = null;
+    if (login != null && !login.isCompleted) login.complete();
+    final chat = _chatresCompleter;
+    _chatresCompleter = null;
+    if (chat != null && !chat.isCompleted) chat.complete('发送房间已切换或关闭');
+    _senderFuture = null;
+    _broadcastCompleter = null;
+    _pendingBroadcastText = null;
+    _hbKey = null;
+    _hbNonce = null;
+    _hbRand = null;
+    _hbIts = 0;
+  }
+
   @override
   int heartbeatTime = 45 * 1000;
 
@@ -174,6 +219,7 @@ class DouyuDanmaku implements LiveDanmaku {
   Future start(dynamic args) async {
     // 重新 start（换房 / 刷新 / 重连）要复位，否则预热会被 stop() 的标记挡住
     _stopped = false;
+    _invalidateSender();
     danmakuArgs = args is DouyuDanmakuArgs
         ? args
         : DouyuDanmakuArgs(roomId: args.toString());
@@ -182,7 +228,7 @@ class DouyuDanmaku implements LiveDanmaku {
     // 表情表是异步拉的，不能阻塞弹幕连接；拉到之前弹幕先按纯文本显示
     unawaited(_loadEmoticons(danmakuArgs.roomId));
     // 进房就把发送连接预热好：等你点发送时不用再建连+登录（那一段容易卡 4 秒）
-    unawaited(_preheatSender());
+    if (_senderActive) unawaited(_preheatSender());
     // 重连/刷新时会再次调用 start()：必须先关闭旧连接，
     // 否则旧 socket 仍在接收消息 → 聊天列表和滚动弹幕都会重复出现
     webScoketUtils?.close();
@@ -275,14 +321,8 @@ class DouyuDanmaku implements LiveDanmaku {
       return;
     }
     danmakuArgs = danmakuArgs.refreshedCookie(cookie);
-    // 发送连接是用旧 jwt 鉴权的，丢掉重建，下次发送就用新 token 登录
-    _senderReady = false;
-    try {
-      _senderSocket?.close();
-    } catch (e) {
-      CoreLog.error(e);
-    }
-    _senderSocket = null;
+    // A refreshed credential invalidates only this room's sender generation.
+    _invalidateSender();
     CoreLog.i("斗鱼弹幕：cookie 已刷新 ${danmakuArgs.sendReadyDesc}");
   }
 
@@ -333,15 +373,14 @@ class DouyuDanmaku implements LiveDanmaku {
   ///   真正发送时 [sendDanmaku] 还会按原有逻辑重试三次；
   /// * 用户不发弹幕的房间里，这就是一条空闲 WS（心跳 30 秒），可接受。
   Future<void> _preheatSender() async {
-    await Future.delayed(const Duration(milliseconds: 1500));
-    if (_stopped || !danmakuArgs.canSend || _senderReady) {
+    final generation = _senderGeneration;
+    await Future.delayed(senderPreheatDelay);
+    if (!_ownsSender(generation) || !danmakuArgs.canSend || _senderReady) {
       return;
     }
     try {
       final error = await _ensureSender();
-      if (error == null) {
-        CoreLog.i("斗鱼发送：进房预热完成，发送时零等待");
-      } else {
+      if (error != null) {
         CoreLog.d("斗鱼发送：进房预热未成功（不影响观看，发送时会重试）→ $error");
       }
     } catch (e) {
@@ -359,18 +398,21 @@ class DouyuDanmaku implements LiveDanmaku {
   /// 切到哪台（旧设备会被断开）。所以这里不弹任何「重新登录」提示，
   /// 每次发送都自动（重）登录，必要时重连一次再试，实现无缝接管。
   Future<String?> _ensureSender() {
+    if (!_ownsSender(_senderGeneration)) return Future.value("发送房间已切换或关闭");
     final running = _senderFuture;
     if (running != null) {
       return running;
     }
-    final future = _ensureSenderInner().whenComplete(() {
-      _senderFuture = null;
+    late final Future<String?> future;
+    future = _ensureSenderInner(_senderGeneration).whenComplete(() {
+      if (identical(_senderFuture, future)) _senderFuture = null;
     });
     _senderFuture = future;
     return future;
   }
 
-  Future<String?> _ensureSenderInner() async {
+  Future<String?> _ensureSenderInner(int generation) async {
+    if (!_ownsSender(generation)) return "发送房间已切换或关闭";
     if (danmakuArgs.jwtExpired) {
       return "斗鱼登录已过期（dmjwt 失效），请重新登录斗鱼";
     }
@@ -380,7 +422,9 @@ class DouyuDanmaku implements LiveDanmaku {
     // 最多尝试三次：上一次设备的会话可能还没释放，多抢一两次更容易成功
     String? lastError;
     for (var attempt = 0; attempt < 3; attempt++) {
-      lastError = await _tryLoginSender();
+      if (!_ownsSender(generation)) return "发送房间已切换或关闭";
+      lastError = await _tryLoginSender(generation);
+      if (!_ownsSender(generation)) return "发送房间已切换或关闭";
       if (lastError == null) {
         return null;
       }
@@ -400,7 +444,8 @@ class DouyuDanmaku implements LiveDanmaku {
   }
 
   /// 单次：建连 + loginreq + 等 loginres
-  Future<String?> _tryLoginSender() async {
+  Future<String?> _tryLoginSender(int generation) async {
+    if (!_ownsSender(generation)) return "发送房间已切换或关闭";
     // 旧连接若未就绪（被顶号后会残留一条半死连接），直接丢弃重建，
     // 否则会在上面白等到超时
     if (_senderSocket != null && !_senderReady) {
@@ -412,7 +457,9 @@ class DouyuDanmaku implements LiveDanmaku {
       _senderSocket = null;
     }
     if (_senderSocket == null) {
-      _senderSocket = WebScoketUtils(
+      late final WebScoketUtils socket;
+      bool owns() => _ownsSender(generation) && identical(_senderSocket, socket);
+      socket = _senderSocketFactory(
         url: senderUrl,
         heartBeatTime: 30 * 1000,
         headers: {
@@ -421,13 +468,14 @@ class DouyuDanmaku implements LiveDanmaku {
           "User-Agent": DouyuSite.kUserAgent,
           if (danmakuArgs.cookie.isNotEmpty) "Cookie": danmakuArgs.cookie,
         },
-        onMessage: (e) => _decodeSenderMessage(e),
-        onReady: () => _loginSender(),
-        onHeartBeat: () => _sendSenderHeartbeat(),
-        onReconnect: () => _senderReady = false,
-        onClose: (e) => _senderReady = false,
+        onMessage: (e) { if (owns()) _decodeSenderMessage(e); },
+        onReady: () { if (owns()) { _loginSender(); } else { socket.close(); } },
+        onHeartBeat: () { if (owns()) _sendSenderHeartbeat(generation); },
+        onReconnect: () { if (owns()) { _senderReady = false; } else { socket.close(); } },
+        onClose: (e) { if (owns()) _senderReady = false; },
       );
-      _senderSocket?.maxReconnectTime = 0;
+      _senderSocket = socket;
+      socket.maxReconnectTime = 0;
     }
     var login = _senderLoginCompleter = Completer<void>();
     _senderReady = false;
@@ -442,6 +490,7 @@ class DouyuDanmaku implements LiveDanmaku {
         _senderLoginCompleter = null;
       }
     }
+    if (!_ownsSender(generation)) return "发送房间已切换或关闭";
     if (!_senderReady) {
       return "斗鱼登录态已失效（jwt 过期或被其它设备接管）";
     }
@@ -450,6 +499,7 @@ class DouyuDanmaku implements LiveDanmaku {
 
   /// 发送连接登录（loginreq + vk 防重放签名）
   void _loginSender() {
+    if (!_ownsSender(_senderGeneration)) return;
     var args = danmakuArgs;
     var rt = _nowSec.toString();
     var vk = md5.convert(utf8.encode(rt + _vkSecret + args.devid)).toString();
@@ -462,7 +512,7 @@ class DouyuDanmaku implements LiveDanmaku {
   }
 
   /// 取心跳签名密钥（getEncryption）
-  Future<void> _loadHeartbeatKey() async {
+  Future<void> _loadHeartbeatKey(int generation) async {
     try {
       var res = await core_http.HttpClient.instance.getJson(
         "https://www.douyu.com/wgapi/livenc/liveweb/websec/getEncryption",
@@ -472,6 +522,7 @@ class DouyuDanmaku implements LiveDanmaku {
           "user-agent": DouyuSite.kUserAgent,
         },
       );
+      if (!_ownsSender(generation)) return;
       var data = (res is Map && res["data"] is Map) ? res["data"] : res;
       if (data is! Map) {
         return;
@@ -492,10 +543,12 @@ class DouyuDanmaku implements LiveDanmaku {
   }
 
   /// 发送连接心跳：必须带签名，否则会被服务端踢掉
-  Future<void> _sendSenderHeartbeat() async {
+  Future<void> _sendSenderHeartbeat(int generation) async {
+    if (!_ownsSender(generation)) return;
     if (_hbKey == null) {
-      await _loadHeartbeatKey();
+      await _loadHeartbeatKey(generation);
     }
+    if (!_ownsSender(generation)) return;
     var key = _hbKey;
     if (key == null || key.isEmpty) {
       return;
@@ -583,7 +636,9 @@ class DouyuDanmaku implements LiveDanmaku {
       }
       if (type == "chatres") {
         var res = int.tryParse(jsonData["res"]?.toString() ?? "") ?? -1;
-        CoreLog.i("斗鱼发送：收到 chatres res=$res");
+        if (res != 0) {
+          CoreLog.i("斗鱼发送：收到 chatres res=$res");
+        }
         _chatresCompleter?.complete(res == 0 ? null : _chatresErrorText(res));
         _chatresCompleter = null;
         return;
@@ -619,6 +674,8 @@ class DouyuDanmaku implements LiveDanmaku {
 
   @override
   Future<String?> sendDanmaku(String message) async {
+    final generation = _senderGeneration;
+    if (!_ownsSender(generation)) return "发送房间已切换或关闭";
     var text = message.trim();
     if (text.isEmpty) {
       return "弹幕内容不能为空";
@@ -638,13 +695,12 @@ class DouyuDanmaku implements LiveDanmaku {
         DateTime.now().difference(_lastSendAt!) < const Duration(seconds: 2)) {
       return "发送太频繁，请稍后再试";
     }
-    CoreLog.i("斗鱼发送：开始建立/复用发送连接（room=${danmakuArgs.roomId}）");
     var senderError = await _ensureSender();
+    if (!_ownsSender(generation)) return "发送房间已切换或关闭";
     if (senderError != null) {
       CoreLog.i("斗鱼发送：发送连接不可用 → $senderError");
       return senderError;
     }
-    CoreLog.i("斗鱼发送：发送连接就绪，开始发送（长度=${text.length}）");
     var args = danmakuArgs;
     var completer = _chatresCompleter = Completer<String?>();
     _lastSendAt = DateTime.now();
@@ -674,8 +730,10 @@ class DouyuDanmaku implements LiveDanmaku {
       if (identical(_chatresCompleter, completer)) {
         _chatresCompleter = null;
       }
-      _broadcastCompleter = null;
-      _pendingBroadcastText = null;
+      if (identical(_broadcastCompleter, broadcast)) {
+        _broadcastCompleter = null;
+        _pendingBroadcastText = null;
+      }
     }
   }
 
@@ -685,26 +743,11 @@ class DouyuDanmaku implements LiveDanmaku {
     onMessage = null;
     onClose = null;
     webScoketUtils?.close();
-    // 发送连接也要一起关，避免残留连接继续重连
-    _senderSocket?.close();
-    _senderSocket = null;
-    _senderReady = false;
-    _senderLoginCompleter = null;
-    _senderFuture = null;
-    _chatresCompleter = null;
+    _invalidateSender();
   }
 
-  /// 诊断用：每种未处理的消息类型记录前 3 条样本
-  final Map<String, int> _loggedUnknownTypes = <String, int>{};
-  /// 诊断用：语音/高能弹幕相关帧最多记录 30 条原始报文
-  int _voiceProbeCount = 0;
-  /// 诊断用：没有 dms 字段被丢弃的 chatmsg 最多记录 5 条
-  int _noDmsChatCount = 0;
   /// 已入库的付费留言 vrid，避免同一条重复建卡
   final Set<String> _voiceIds = <String>{};
-
-  String _truncateRaw(String raw) =>
-      raw.length <= 800 ? raw : "${raw.substring(0, 800)}…(len=${raw.length})";
 
   void decodeMessage(List<int> data) {
     try {
@@ -715,22 +758,6 @@ class DouyuDanmaku implements LiveDanmaku {
       var jsonData = sttToJObject(result);
 
       var type = jsonData["type"]?.toString();
-      // 诊断：任何和语音/高能弹幕沾边的帧都留原始报文（最多 30 条），
-      // 用来定位「听到了语音播报但没有卡片」的那类消息。
-      if (_voiceProbeCount < 30 &&
-          !result.contains("type@=chatmsg") &&
-          (result.contains("voice") ||
-              result.contains("voc") ||
-              result.contains("高能") ||
-              result.contains("voiceDanmu"))) {
-        _voiceProbeCount++;
-        CoreLog.i("斗鱼弹幕：语音相关帧#" +
-            _voiceProbeCount.toString() +
-            " type=" +
-            (type ?? "?") +
-            " 原始=" +
-            _truncateRaw(result));
-      }
       // 登录响应：到这里才算真正登录成功
       if (type == "loginres") {
         var login = _loginCompleter;
@@ -743,13 +770,6 @@ class DouyuDanmaku implements LiveDanmaku {
       if (type == "chatmsg") {
         // 屏蔽阴间弹幕
         if (jsonData["dms"] == null) {
-          if (_noDmsChatCount < 5) {
-            _noDmsChatCount++;
-            CoreLog.i("斗鱼弹幕：chatmsg 缺 dms 被丢弃#" +
-                _noDmsChatCount.toString() +
-                " 原始=" +
-                _truncateRaw(result));
-          }
           return;
         }
         var col = int.tryParse(jsonData["col"].toString()) ?? 0;
@@ -780,7 +800,6 @@ class DouyuDanmaku implements LiveDanmaku {
         if (isSelf &&
             _pendingBroadcastText != null &&
             jsonData["txt"]?.toString() == _pendingBroadcastText) {
-          CoreLog.i("斗鱼发送：收到自己的弹幕广播，判定成功");
           var broadcast = _broadcastCompleter;
           if (broadcast != null && !broadcast.isCompleted) {
             broadcast.complete();
@@ -801,19 +820,6 @@ class DouyuDanmaku implements LiveDanmaku {
         _handleVoiceTrlt(jsonData);
         return;
       }
-      // 其它暂未处理的类型：每种只记录一条样本，便于后续接入
-      if (type != null && type.isNotEmpty) {
-        final seen = _loggedUnknownTypes[type] ?? 0;
-        if (seen < 3) {
-          _loggedUnknownTypes[type] = seen + 1;
-          CoreLog.i("斗鱼弹幕：未处理消息 type=" +
-              type +
-              " #" +
-              (seen + 1).toString() +
-              " 样本=" +
-              _truncateRaw(result));
-        }
-      }
     } catch (e) {
       CoreLog.error(e);
     }
@@ -832,7 +838,6 @@ class DouyuDanmaku implements LiveDanmaku {
     try {
       final mtype = int.tryParse(jsonData["mtype"]?.toString() ?? "") ?? 2;
       final items = _decodeVoiceList(jsonData["list"]);
-      CoreLog.d("斗鱼弹幕：voice_trlt mtype=$mtype items=${items.length}");
       for (final item in items) {
         final map = _decodeVoiceItem(item);
         if (map == null) {
@@ -880,10 +885,6 @@ class DouyuDanmaku implements LiveDanmaku {
       if (jsonData["btype"]?.toString() != "voiceDanmu") {
         return;
       }
-      CoreLog.d(
-        "斗鱼弹幕：comm_chatmsg voiceDanmu rid=${jsonData["rid"]} "
-        "vrid=${jsonData["vrid"]} cprice=${jsonData["cprice"]}",
-      );
       final roomId = jsonData["rid"]?.toString() ?? "";
       if (danmakuArgs.roomId.isNotEmpty && roomId != danmakuArgs.roomId) {
         // 斗鱼会把已加入房间的广播都推过来，别的房间的高能弹幕要丢掉
@@ -952,10 +953,6 @@ class DouyuDanmaku implements LiveDanmaku {
       endTime: endTime,
       backgroundColor: colors.header,
       backgroundBottomColor: colors.body,
-    );
-    CoreLog.i(
-      "斗鱼弹幕：付费留言入库[$source] id=$id user=${sc.userName} "
-      "price=$price seconds=$seconds text=${_truncateRaw(sc.message)}",
     );
     onMessage?.call(
       LiveMessage(

@@ -81,6 +81,9 @@ class DouyuWebLoginController extends BaseController {
     try {
       var cookieStr = WebLoginCookieHelper.toHeader(cookies);
       Log.i("斗鱼Web登录：抓到的 Cookie 字段 [${cookies.keys.join(',')}]");
+      if (!cookies.containsKey("LTP0")) {
+        Log.i("斗鱼Web登录：未抓到 LTP0，后续无法静默续期（过期需重新登录）");
+      }
       DouyuAccountService.instance.setCookie(cookieStr);
       if (!DouyuAccountService.instance.logined.value) {
         _handled = false;

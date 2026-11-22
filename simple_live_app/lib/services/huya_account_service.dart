@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/constant.dart';
@@ -36,7 +37,8 @@ class HuyaAccountService extends GetxService {
         .getValue(LocalStorageService.kHuyaNickname, "");
     parseCookie();
     setSite();
-    if (logined.value && nickname.isEmpty) {
+    // 启动时用服务端对昵称/登录态对账一次（异步、失败静默）
+    if (logined.value) {
       fetchNickname();
     }
     super.onInit();
@@ -140,6 +142,21 @@ class HuyaAccountService extends GetxService {
               : <dynamic, dynamic>{});
       var nick = (map["userNick"] ?? "").toString().trim();
       Log.i("虎牙昵称接口：isLogined=${map["isLogined"]} userNick=$nick");
+      // 服务端明确判未登录：本地有 udb_uid 也不可信。仅在本地也没有昵称缓存时
+      // 翻转，避免接口偶发误判把正常用户踢下线；真正的发送失败由弹幕回执（905）兜底。
+      if (map["isLogined"] == false) {
+        if (nickname.isEmpty) {
+          logined.value = false;
+          name.value = "未登录";
+          SmartDialog.showToast("虎牙登录已失效，请重新登录");
+        } else {
+          // 本地有昵称缓存时仍不翻转登录态（避免接口偶发误判直接踢下线），
+          // 但必须提示用户：这种账号就是「显示已登录、实际发不出弹幕」。
+          Log.i("虎牙昵称接口判未登录，本地有昵称缓存，提示用户重新登录但不强制翻转");
+          SmartDialog.showToast("虎牙登录已失效，请重新登录");
+        }
+        return;
+      }
       if (nick.isNotEmpty) {
         nickname = nick;
         LocalStorageService.instance

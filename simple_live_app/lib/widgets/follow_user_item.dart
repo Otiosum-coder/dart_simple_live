@@ -1,26 +1,31 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:remixicon/remixicon.dart';
 import 'package:simple_live_app/app/app_style.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
+import 'package:simple_live_app/services/follow_service.dart';
+import 'package:simple_live_app/widgets/follow_management_sheet.dart';
 import 'package:simple_live_app/widgets/net_image.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 import 'dart:ui' as ui;
 
 class FollowUserItem extends StatelessWidget {
   final FollowUser item;
-  final Function()? onRemove;
+  final VoidCallback? onManage;
   final Function()? onTap;
   final Function()? onLongPress;
   final bool playing;
+
+  /// 直播间内的「关注列表」只用于切台，不再显示关注管理入口；关注页仍保留。
+  final bool showManageAction;
   const FollowUserItem({
     required this.item,
-    this.onRemove,
+    this.onManage,
     this.onTap,
     this.onLongPress,
     this.playing = false,
+    this.showManageAction = true,
     Key? key,
   }) : super(key: key);
 
@@ -34,6 +39,7 @@ class FollowUserItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     var site = Sites.allSites[item.siteId]!;
+    final manage = onManage ?? () => FollowManagementSheet.show(item);
     var tile = ListTile(
       contentPadding: AppStyle.edgeInsetsL16.copyWith(right: 4),
       leading: NetImage(
@@ -42,48 +48,64 @@ class FollowUserItem extends StatelessWidget {
         height: 48,
         borderRadius: 24,
       ),
-      title: Text.rich(
-        TextSpan(
-          text: item.userName,
-          children: [
-            WidgetSpan(
-              alignment: ui.PlaceholderAlignment.middle,
-              child: Obx(
-                () => Offstage(
-                  offstage: item.liveStatus.value == 0,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      AppStyle.hGap12,
-                      Container(
-                        width: 8,
-                        height: 8,
-                        decoration: BoxDecoration(
-                          color: item.roomNotFound
-                              ? Colors.orange
-                              : item.liveStatus.value == 2
-                                  ? Colors.green
-                                  : Colors.grey,
-                          borderRadius: AppStyle.radius12,
-                        ),
+      title: Obx(
+        () {
+          final current = FollowService.instance.getFollowUser(item.id) ?? item;
+          return Text.rich(
+            TextSpan(
+              text: item.userName,
+              children: [
+                if (current.isSpecial)
+                  WidgetSpan(
+                    alignment: ui.PlaceholderAlignment.middle,
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 4),
+                      child: Icon(
+                        Icons.star_rounded,
+                        size: 18,
+                        color: Theme.of(context).colorScheme.primary,
+                        semanticLabel: '特别关注',
                       ),
-                      AppStyle.hGap4,
-                      Text(
-                        getStatus(item.liveStatus.value),
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.normal,
-                          color:
-                              item.liveStatus.value == 2 ? null : Colors.grey,
+                    ),
+                  ),
+                WidgetSpan(
+                  alignment: ui.PlaceholderAlignment.middle,
+                  child: Offstage(
+                    offstage: item.liveStatus.value == 0,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        AppStyle.hGap12,
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: item.roomNotFound
+                                ? Colors.orange
+                                : item.liveStatus.value == 2
+                                    ? Colors.green
+                                    : Colors.grey,
+                            borderRadius: AppStyle.radius12,
+                          ),
                         ),
-                      ),
-                    ],
+                        AppStyle.hGap4,
+                        Text(
+                          getStatus(item.liveStatus.value),
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.normal,
+                            color:
+                                item.liveStatus.value == 2 ? null : Colors.grey,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
+              ],
             ),
-          ],
-        ),
+          );
+        },
       ),
       subtitle: Wrap(
         runSpacing: 1.0,
@@ -149,25 +171,22 @@ class FollowUserItem extends StatelessWidget {
             ),
         ],
       ),
-      trailing: playing
-          ? const SizedBox(
-              width: 64,
-              child: Center(
-                child: Icon(
-                  Icons.play_arrow,
-                ),
-              ),
+      trailing: (playing || showManageAction)
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (playing) const Icon(Icons.play_arrow),
+                if (showManageAction)
+                  IconButton(
+                    tooltip: '关注管理',
+                    onPressed: manage,
+                    icon: const Icon(Icons.more_horiz),
+                  ),
+              ],
             )
-          : (onRemove == null
-              ? null
-              : IconButton(
-                  onPressed: () {
-                    onRemove?.call();
-                  },
-                  icon: const Icon(Remix.dislike_line),
-                )),
+          : null,
       onTap: onTap,
-      onLongPress: onLongPress,
+      onLongPress: onLongPress ?? manage,
     );
 
     // 未开播（status==1）整行降权：扫视规则变成「亮的=在播、暗的=没播」。
@@ -175,9 +194,7 @@ class FollowUserItem extends StatelessWidget {
     // 正在观看 / 房间失效的卡片也不降权，别把当前项压暗。
     return Obx(
       () => Opacity(
-        opacity: (item.liveStatus.value == 1 &&
-                !playing &&
-                !item.roomNotFound)
+        opacity: (item.liveStatus.value == 1 && !playing && !item.roomNotFound)
             ? offlineOpacity
             : 1.0,
         child: tile,

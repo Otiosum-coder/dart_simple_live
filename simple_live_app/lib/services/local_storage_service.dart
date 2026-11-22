@@ -147,7 +147,6 @@ class LocalStorageService extends GetxService {
   /// 抖音登录cookie 的备份（退出登录后仍可复制到别的设备用）
   static const String kDouyinLoginCookieBackup = "DouyinLoginCookieBackup";
 
-
   ///主题色
   static const String kStyleColor = "kStyleColor";
 
@@ -180,6 +179,9 @@ class LocalStorageService extends GetxService {
 
   /// 开启自动更新关注
   static const String kAutoUpdateFollowEnable = "AutoUpdateFollowEnable";
+
+  /// 特别关注统一开播提醒
+  static const String kSpecialFollowNotifyEnable = 'SpecialFollowNotifyEnable';
 
   /// 定时自动更新关注间隔（分钟）
   static const String kUpdateFollowDuration = "AutoUpdateFollowDuration";

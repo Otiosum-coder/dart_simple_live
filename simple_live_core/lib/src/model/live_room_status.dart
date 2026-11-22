@@ -21,11 +21,15 @@ class LiveRoomStatus {
   /// 房间已失效/不存在（例如旧房间号、主播已注销），区别于「未开播」
   final bool roomNotFound;
 
+  /// 查询是否成功。网络失败或旧缓存不能作为开/下播的状态变化。
+  final bool querySucceeded;
+
   LiveRoomStatus({
     required this.roomId,
     required this.isLive,
     this.startTime,
     this.lastLiveTime,
     this.roomNotFound = false,
+    this.querySucceeded = true,
   });
 }

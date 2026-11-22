@@ -4,12 +4,12 @@ import 'package:remixicon/remixicon.dart';
 import 'package:simple_live_app/app/app_style.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
-import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/follow_user_tag.dart';
 import 'package:simple_live_app/modules/follow_user/follow_user_controller.dart';
 import 'package:simple_live_app/routes/app_navigation.dart';
 import 'package:simple_live_app/services/follow_service.dart';
 import 'package:simple_live_app/widgets/filter_button.dart';
+import 'package:simple_live_app/widgets/follow_management_sheet.dart';
 import 'package:simple_live_app/widgets/follow_user_item.dart';
 import 'package:simple_live_app/widgets/page_grid_view.dart';
 
@@ -161,13 +161,7 @@ class FollowUserPage extends GetView<FollowUserController> {
                       spacing: 10,
                       runSpacing: 10,
                       children: controller.tagList.map((option) {
-                        return FilterButton(
-                          text: option.tag,
-                          selected: controller.filterMode.value == option,
-                          onTap: () {
-                            controller.setFilterMode(option);
-                          },
-                        );
+                        return buildFilterOption(context, option);
                       }).toList(),
                     ),
                   ),
@@ -188,16 +182,12 @@ class FollowUserPage extends GetView<FollowUserController> {
                 var site = Sites.allSites[item.siteId]!;
                 return FollowUserItem(
                   item: item,
-                  onRemove: () {
-                    controller.removeItem(item);
-                  },
+                  onManage: () => FollowManagementSheet.show(item),
                   onTap: () {
                     AppNavigator.toLiveRoomDetail(
                         site: site, roomId: item.roomId);
                   },
-                  onLongPress: () {
-                    setFollowTagDialog(item);
-                  },
+                  onLongPress: () => FollowManagementSheet.show(item),
                 );
               },
             ),
@@ -269,99 +259,35 @@ class FollowUserPage extends GetView<FollowUserController> {
     );
   }
 
-  /// 设置主播的标签（多选）
-  ///
-  /// 「全部」不是标签（它是「显示所有关注」的筛选），所以这里不出现；
-  /// 一个都不勾 = 不属于任何自定义标签。
-  void setFollowTagDialog(FollowUser item) {
-    var customTags =
-        controller.userTagList.where((e) => e.tag != "全部").toList();
-    // 当前所属标签：以标签的 userId 成员关系为准（旧数据用 item.tag 兜底）
-    var selected = <String>{};
-    for (var tag in customTags) {
-      if (tag.userId.contains(item.id)) {
-        selected.add(tag.tag);
-      }
+  Widget buildFilterOption(BuildContext context, FollowFilterOption option) {
+    final selected = controller.filterMode.value.key == option.key;
+    if (option.type != FollowFilterType.special) {
+      return FilterButton(
+        key: ValueKey(option.key),
+        text: option.label,
+        selected: selected,
+        onTap: () => controller.setFilterMode(option),
+      );
     }
-    if (selected.isEmpty && item.tag != "全部") {
-      selected.add(item.tag);
-    }
-    Get.dialog(
-      AlertDialog(
-        contentPadding: const EdgeInsets.all(16.0),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12.0),
+    final style = Theme.of(context).textTheme.bodyMedium!;
+    final color = selected ? style.color! : Colors.grey;
+    return InkWell(
+      key: ValueKey(option.key),
+      borderRadius: AppStyle.radius24,
+      onTap: () => controller.setFilterMode(option),
+      child: Container(
+        padding: AppStyle.edgeInsetsH12.copyWith(top: 4, bottom: 4),
+        decoration: BoxDecoration(
+          border: Border.all(color: color),
+          borderRadius: AppStyle.radius24,
         ),
-        content: SizedBox(
-          width: 300,
-          child: StatefulBuilder(
-            builder: (context, setDialogState) {
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        '设置标签',
-                        style: TextStyle(fontSize: 18),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.check),
-                        onPressed: () {
-                          controller.setItemTags(item, selected.toList());
-                          Get.back();
-                        },
-                      ),
-                    ],
-                  ),
-                  Text(
-                    '当前：' +
-                        (selected.isEmpty
-                            ? '未设置标签'
-                            : selected.join('、')),
-                    style: const TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                  const Divider(),
-                  if (customTags.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 24),
-                      child: Text(
-                        '还没有自定义标签，可在右上角「标签管理」里添加',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 12, color: Colors.grey),
-                      ),
-                    )
-                  else
-                    SizedBox(
-                      height: 260,
-                      child: ListView.builder(
-                        itemCount: customTags.length,
-                        itemBuilder: (context, index) {
-                          var tag = customTags[index];
-                          return CheckboxListTile(
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            title: Text(tag.tag),
-                            value: selected.contains(tag.tag),
-                            onChanged: (checked) {
-                              setDialogState(() {
-                                if (checked == true) {
-                                  selected.add(tag.tag);
-                                } else {
-                                  selected.remove(tag.tag);
-                                }
-                              });
-                            },
-                          );
-                        },
-                      ),
-                    ),
-                ],
-              );
-            },
-          ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.star_rounded, size: 16, color: color),
+            AppStyle.hGap4,
+            Text(option.label, style: style.copyWith(color: color)),
+          ],
         ),
       ),
     );

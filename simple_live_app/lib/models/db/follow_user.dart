@@ -12,7 +12,8 @@ class FollowUser {
     required this.userName,
     required this.face,
     required this.addTime,
-    this.tag = "全部"
+    this.tag = "全部",
+    this.isSpecial = false,
   });
 
   ///id=siteId_roomId
@@ -37,6 +38,10 @@ class FollowUser {
   @HiveField(6)
   String tag;
 
+  /// 特别关注独立于用户标签；旧数据默认普通关注。
+  @HiveField(7, defaultValue: false)
+  bool isSpecial;
+
   /// 直播状态
   /// 0=未知(加载中) 1=未开播 2=直播中
   Rx<int> liveStatus = 0.obs;
@@ -57,7 +62,8 @@ class FollowUser {
         userName: json['userName'],
         face: json['face'],
         addTime: DateTime.parse(json['addTime']),
-        tag: json["tag"]??"全部",
+        tag: json["tag"] ?? "全部",
+        isSpecial: json["isSpecial"] == true,
       );
 
   Map<String, dynamic> toJson() => {
@@ -67,6 +73,7 @@ class FollowUser {
         'userName': userName,
         'face': face,
         'addTime': addTime.toString(),
-        'tag':tag,
+        'tag': tag,
+        'isSpecial': isSpecial,
       };
 }
