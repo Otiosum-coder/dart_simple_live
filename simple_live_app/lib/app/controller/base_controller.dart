@@ -68,34 +68,36 @@ class BasePageController<T> extends BaseController {
   }
 
   Future loadData() async {
+    final page = currentPage;
     try {
       if (loadding) return;
       loadding = true;
       pageError.value = false;
       pageEmpty.value = false;
       notLogin.value = false;
-      pageLoadding.value = currentPage == 1;
+      pageLoadding.value = page == 1;
 
-      var result = await getData(currentPage, pageSize);
+      var result = await getData(page, pageSize);
       //是否可以加载更多
       if (result.isNotEmpty) {
-        currentPage++;
+        currentPage = page + 1;
         canLoadMore.value = true;
         pageEmpty.value = false;
       } else {
         canLoadMore.value = false;
-        if (currentPage == 1) {
+        if (page == 1) {
           pageEmpty.value = true;
         }
       }
-      // 赋值数据
-      if (currentPage == 1) {
+      // 赋值数据：始终按入口页号判断，避免刷新期间 currentPage 被改动后
+      // 把第一页结果当成下一页追加，造成列表重复。
+      if (page == 1) {
         list.value = result;
       } else {
         list.addAll(result);
       }
     } catch (e) {
-      handleError(e, showPageError: currentPage == 1);
+      handleError(e, showPageError: page == 1);
     } finally {
       loadding = false;
       pageLoadding.value = false;

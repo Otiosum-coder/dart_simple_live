@@ -101,8 +101,13 @@ class HuyaAccountService extends GetxService {
     site.cookie = cookie;
   }
 
-  void setCookie(String value) {
+  void setCookie(String value, {bool freshLogin = false}) {
     cookie = value.trim();
+    if (freshLogin && cookie.isNotEmpty) {
+      _loginAt = DateTime.now();
+    } else if (cookie.isEmpty) {
+      _loginAt = null;
+    }
     LocalStorageService.instance
         .setValue(LocalStorageService.kHuyaCookie, cookie);
     parseCookie();
@@ -116,6 +121,16 @@ class HuyaAccountService extends GetxService {
 
   bool _harvesting = false;
   bool _fetchingNickname = false;
+  DateTime? _loginAt;
+
+  /// 刚扫码登录后的短时间内，www.huya.com 的昵称接口可能还没同步
+  /// udblgn 下发的登录态，会短暂返回 isLogined=false。此时不能把刚登录
+  /// 成功的账号直接踢下线，否则会先提示“登录成功”紧接着又提示“登录已失效”。
+  bool get _isFreshLogin {
+    final at = _loginAt;
+    return at != null &&
+        DateTime.now().difference(at) < const Duration(minutes: 2);
+  }
 
   /// 用（补全后的）Cookie 查展示昵称：www.huya.com 的用户信息接口
   Future<void> fetchNickname() async {
@@ -144,6 +159,15 @@ class HuyaAccountService extends GetxService {
       Log.i("虎牙昵称接口：isLogined=${map["isLogined"]} userNick=$nick");
       // 服务端明确判未登录：本地有 udb_uid 也不可信。仅在本地也没有昵称缓存时
       // 翻转，避免接口偶发误判把正常用户踢下线；真正的发送失败由弹幕回执（905）兜底。
+      // 扫码登录拿到的是 udblgn 域的薄 Cookie，www.huya.com 的昵称接口
+      // 在桌面端可能始终不认它（桌面不做 WebView 补全）。刚登录 2 分钟内
+      // 以及仍带 web_qrlogin_confirm_id 的二维码 Cookie，都不能据此把用户
+      // 踢下线，否则会在“登录成功”后马上又提示“登录已失效”。
+      final isQrCookie = cookie.contains('web_qrlogin_confirm_id');
+      if (map["isLogined"] == false && (_isFreshLogin || isQrCookie)) {
+        Log.i("虎牙昵称接口暂未同步二维码登录态，保留本地登录态");
+        return;
+      }
       if (map["isLogined"] == false) {
         if (nickname.isEmpty) {
           logined.value = false;

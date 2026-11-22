@@ -356,9 +356,9 @@ void main() {
       expect(manifest.contains('POST_NOTIFICATIONS'), isTrue);
     });
 
-    test('pubspec 版本号已升到 1.12.0+13120', () {
+    test('pubspec 版本号已升到 1.12.2+13122', () {
       final pubspec = _read('pubspec.yaml');
-      expect(pubspec.contains('version: 1.12.0+13120'), isTrue);
+      expect(pubspec.contains('version: 1.12.2+13122'), isTrue);
     });
   });
 }

@@ -61,6 +61,9 @@ class HuyaQRLoginController extends GetxController {
   /// 是否已经给服务端发过「已扫码」通知（只发一次）
   bool _scanNotified = false;
 
+  /// 登录成功后不要再去 cancelLogin，否则可能把刚拿到的登录票据作废
+  bool _loginSucceeded = false;
+
   String _newGuid() {
     var random = Random.secure();
     var chars = "0123456789abcdef";
@@ -101,6 +104,7 @@ class HuyaQRLoginController extends GetxController {
   Future<void> _bootstrap() async {
     await _get("https://i.huya.com/");
   }
+
   Timer? _timer;
   DateTime? _startTime;
 
@@ -130,8 +134,7 @@ class HuyaQRLoginController extends GetxController {
       if (index <= 0) {
         return;
       }
-      _jar[item.substring(0, index).trim()] =
-          item.substring(index + 1).trim();
+      _jar[item.substring(0, index).trim()] = item.substring(index + 1).trim();
     });
   }
 
@@ -185,7 +188,6 @@ class HuyaQRLoginController extends GetxController {
     _collectCookies(response.headers);
     return _asMap(response.data);
   }
-
 
   /// 带 Cookie 的普通 GET（用于兜底补登录态）
   Future<void> _get(String url) async {
@@ -288,7 +290,8 @@ class HuyaQRLoginController extends GetxController {
       return;
     }
     try {
-      var result = await _post("/qrLgn/tryQrLogin", "70003", context: _wbContext, {
+      var result =
+          await _post("/qrLgn/tryQrLogin", "70003", context: _wbContext, {
         "qrId": qrId,
         "remember": "1",
         "domainList": "",
@@ -361,11 +364,12 @@ class HuyaQRLoginController extends GetxController {
         throw "未能获取登录 Cookie，请改用「Web登录」或「Cookie登录」";
       }
       var cookieStr = _jar.entries.map((e) => '${e.key}=${e.value}').join(';');
-      HuyaAccountService.instance.setCookie(cookieStr);
+      HuyaAccountService.instance.setCookie(cookieStr, freshLogin: true);
       if (!HuyaAccountService.instance.logined.value) {
         HuyaAccountService.instance.logout();
         throw "登录态不完整，请改用「Web登录」或「Cookie登录」";
       }
+      _loginSucceeded = true;
       Log.i("虎牙扫码登录成功：${HuyaAccountService.instance.name.value}");
       SmartDialog.showToast("虎牙登录成功");
       Get.back();
@@ -379,8 +383,8 @@ class HuyaQRLoginController extends GetxController {
   @override
   void onClose() {
     _timer?.cancel();
-    if (qrId.isNotEmpty) {
-      // 退出页面时释放二维码，避免占用
+    if (!_loginSucceeded && qrId.isNotEmpty) {
+      // 退出页面时释放二维码，避免占用；登录成功后不再取消，避免作废刚拿到的登录票据
       _post("/qrLgn/cancelLogin", "70009", {"qrId": qrId})
           .catchError((e) => <String, dynamic>{});
     }
