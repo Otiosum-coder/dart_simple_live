@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Simple Live
+Comment=Watch live streams
+Exec=/opt/simple-live/simple_live_app
+Icon=simple-live
+Terminal=false
+Categories=AudioVideo;Player;
+StartupNotify=true

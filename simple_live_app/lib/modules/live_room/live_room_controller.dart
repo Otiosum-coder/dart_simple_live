@@ -112,6 +112,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   var liveStatus = false.obs;
   RxList<LiveSuperChatMessage> superChats = RxList<LiveSuperChatMessage>();
 
+  /// 斗鱼 SC 仅保留在当前房间会话的内存中。
+  static const int superChatHistoryLimit = 100;
+  bool get _retainSuperChatHistory => site.id == Constant.kDouyu;
+  bool get _hasExpiringSuperChats =>
+      !_retainSuperChatHistory && superChats.isNotEmpty;
+
   /// 画面内 SC 卡片显示时长（秒，固定）
   static const int overlaySuperChatSeconds = 10;
 
@@ -228,7 +234,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
     // 媒体通知/锁屏按钮命令 -> 驱动播放器，实现原生与 Dart 双向同步。
     _bgCommandsSubscription = BackgroundPlayback.commands.listen((command) {
-      if (isClosed ||
+      if (embedded ||
+          isClosed ||
           _roomClosing ||
           bgGeneration != _bgSubscriptionGeneration) {
         return;
@@ -309,8 +316,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   // 弹窗逻辑
 
   void refreshRoom() {
-    //messages.clear();
-    superChats.clear();
+    // 同房间刷新保留斗鱼临时记录，浮层展示时间不重新计算。
+    if (!_retainSuperChatHistory) superChats.clear();
     liveDanmaku.stop();
 
     loadData();
@@ -446,13 +453,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     } else if (msg.type == LiveMessageType.online) {
       online.value = msg.data;
     } else if (msg.type == LiveMessageType.superChat) {
-      // 同一条付费留言可能被重复推送（进房全量 + 增量），按平台 id 去重
-      final id = msg.data.id;
-      if (id.isNotEmpty && superChats.any((e) => e.id == id)) {
-        return;
-      }
-      superChats.add(msg.data);
-      addOverlaySuperChat(msg.data);
+      final sc = msg.data as LiveSuperChatMessage;
+      if (_addSuperChat(sc)) addOverlaySuperChat(sc);
     }
   }
 
@@ -479,6 +481,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   /// 后台播放订阅/回写 generation：房间关闭或重载时自增，令旧回调失效
   int _bgSubscriptionGeneration = 0;
+
+  /// 头像/图标异步读取结束后，只允许最新房间的元数据进入系统通知。
+  int _bgMetadataGeneration = 0;
 
   /// 主播头像字节缓存（按 URL 去重，避免每次状态回写都重新拉图）
   Uint8List? _lastAvatarBytes;
@@ -512,29 +517,46 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   /// 关闭开关时立刻停服务（通知随之消失）；打开开关时如果正在播放就马上起服务。
   Future<void> syncBackgroundPlayback() async {
     if (isClosed || _roomClosing || embedded) return;
+    final metadataGeneration = ++_bgMetadataGeneration;
+    final roomGeneration = _roomLoadGeneration;
     if (!AppSettingsController.instance.playerBackgroundPlay.value) {
       await BackgroundPlayback.stop();
       return;
     }
     final room = detail.value;
-    final user = room?.userName ?? "";
-    final title = room?.title ?? "";
+    // 详情未到时不启动服务：此时开播时间未知，会显示 00:00/00:00。
+    // loadData() 完成后再调用一次，保证第一次发布就带正确的开播时间。
+    if (room == null) return;
+    final user = room.userName;
+    final title = room.title;
     final source = site.name;
-    final startedAtMillis = (room?.status == true && room?.isRecord != true)
-        ? (int.tryParse(room?.showTime ?? '') ?? 0) * 1000
+    final startedAtMillis = (room.status && !room.isRecord)
+        ? (int.tryParse(room.showTime ?? '') ?? 0) * 1000
         : 0;
-    final avatarUrl = room?.userAvatar ?? "";
+    bool isCurrent() =>
+        !isClosed &&
+        !_roomClosing &&
+        metadataGeneration == _bgMetadataGeneration &&
+        roomGeneration == _roomLoadGeneration &&
+        identical(room, detail.value) &&
+        AppSettingsController.instance.playerBackgroundPlay.value;
+
+    final avatarUrl = room.userAvatar;
     Uint8List? avatarBytes;
     if (avatarUrl.isNotEmpty) {
-      if (avatarUrl != _lastAvatarUrl) {
-        _lastAvatarUrl = avatarUrl;
-        _lastAvatarBytes = await _fetchImageBytes(avatarUrl);
-        if (isClosed || _roomClosing) return;
+      if (avatarUrl == _lastAvatarUrl) {
+        avatarBytes = _lastAvatarBytes;
+      } else {
+        avatarBytes = await _fetchImageBytes(avatarUrl);
+        if (!isCurrent()) return;
+        if (avatarBytes != null) {
+          _lastAvatarUrl = avatarUrl;
+          _lastAvatarBytes = avatarBytes;
+        }
       }
-      avatarBytes = _lastAvatarBytes;
     }
     final platformIconBytes = await _loadPlatformIconBytes();
-    if (isClosed || _roomClosing) return;
+    if (!isCurrent()) return;
     await BackgroundPlayback.start(
       title.isEmpty ? "正在后台播放" : title,
       artist: user,
@@ -543,14 +565,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       avatarBytes: avatarBytes,
       platformIconBytes: platformIconBytes,
     );
-    await BackgroundPlayback.updateMetadata(
-      title: title,
-      artist: user,
-      source: source,
-      startedAtMillis: startedAtMillis,
-      avatarBytes: avatarBytes,
-      platformIconBytes: platformIconBytes,
-    );
+    // start 已携带完整元数据；不重复解码封面，也不让旧请求在切台后再次回写。
   }
 
   /// 读取当前平台的图标字节，供原生合成通知艺术图（失败返回 null，仅用头像）。
@@ -769,6 +784,13 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (tokenTip != null) {
       return tokenTip;
     }
+    final huyaSessionGeneration = site.id == Constant.kHuya
+        ? HuyaAccountService.instance.sessionGeneration
+        : null;
+    if (site.id == Constant.kHuya && liveDanmaku is HuyaDanmaku) {
+      (liveDanmaku as HuyaDanmaku)
+          .updateCookie(HuyaAccountService.instance.cookie);
+    }
     // 先建 pending 记录（广播可能比回执先到，靠它判断“这条是否已上屏”）
     final pending = _PendingSend(message);
     final token = ++_sendTokenSeq;
@@ -783,6 +805,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       }
       // 被其它设备顶掉登录态时：不弹任何提示，直接静默重连抢回会话再发一次
       if (canContinue() &&
+          site.id == Constant.kDouyu &&
           error != null &&
           _isSessionLostError(error) &&
           !_autoRecoveringSession) {
@@ -817,15 +840,31 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
               "刷新登录态后重试结果：${error == null ? "成功" : LogSanitizer.text(error)}");
         }
       }
-      // 虎牙：服务端回执 905（登录态失效）→ 翻转登录状态并给明确提示，
-      // 避免「账号还显示登录中、实际发不出去」的错觉。
-      if (error != null &&
+      // 只处理核心库明确识别的登录失效，普通业务异常不翻转账号状态。
+      if (canContinue() &&
+          error != null &&
           site.id == Constant.kHuya &&
-          (error.contains("905") ||
-              error.contains("biz exception") ||
-              error.contains("登录已失效"))) {
-        HuyaAccountService.instance.logined.value = false;
-        error = "虎牙登录已失效，请重新登录";
+          error.contains("登录已失效")) {
+        final account = HuyaAccountService.instance;
+        final generation = huyaSessionGeneration!;
+        final recovered = generation == account.sessionGeneration &&
+            await account.recoverSession();
+        if (!canContinue()) {
+          _pendingSends.remove(token);
+          return "发送房间已切换或关闭";
+        }
+        if (generation != account.sessionGeneration) {
+          error = "虎牙账号已更新，请重试发送";
+        } else if (recovered) {
+          if (liveDanmaku is HuyaDanmaku) {
+            (liveDanmaku as HuyaDanmaku).updateCookie(account.cookie);
+          }
+          error = "虎牙登录状态已恢复，请重试发送";
+        } else if (account.logined.value) {
+          error = "虎牙登录状态暂无法确认，请稍后重试";
+        } else {
+          error = "虎牙登录已失效，请重新登录";
+        }
       }
       // 斗鱼：356 / 超时属于「结果不确定」，按成功静默处理
       if (error != null && _isSilentSuccess(error)) {
@@ -962,6 +1001,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
           await requestedSite.liveSite.getRoomDetail(roomId: requestedRoomId);
       if (isClosed || generation != _roomLoadGeneration) return;
       detail.value = room;
+      // 详情（含 showTime）就绪后补一次后台播放元数据同步，避免先以 0 开播时间起服务。
+      if (!embedded && playerPlaying.value) {
+        unawaited(syncBackgroundPlayback());
+      }
       Log.i("房间加载耗时[${site.id}] 详情=${sw.elapsedMilliseconds}ms");
       sw.reset();
 
@@ -1407,24 +1450,44 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
   }
 
+  /// 斗鱼列表允许已到期的房间增量，浮层仍单独按 endTime 判断。
+  bool _addSuperChat(LiveSuperChatMessage sc) {
+    if (isClosed || _roomClosing) return false;
+    if (!_retainSuperChatHistory && !sc.endTime.isAfter(DateTime.now())) {
+      return false;
+    }
+    removeSuperChats();
+    if (sc.id.isNotEmpty && superChats.any((e) => e.id == sc.id)) return false;
+    superChats.add(sc);
+    if (_retainSuperChatHistory) {
+      if (superChats.length > superChatHistoryLimit) {
+        superChats.removeRange(0, superChats.length - superChatHistoryLimit);
+      }
+    } else {
+      _startOverlayScTimer();
+    }
+    return true;
+  }
+
   /// 添加一条画面内 SC（已到期的不会加入）
   void addOverlaySuperChat(LiveSuperChatMessage sc, {int? maxSeconds}) {
     if (overlaySuperChats.any((e) => e.message == sc)) {
       return;
     }
-    var seconds = maxSeconds ?? overlaySuperChatSeconds;
-    if (seconds <= 0) {
+    final now = DateTime.now();
+    final seconds = maxSeconds ?? overlaySuperChatSeconds;
+    if (seconds <= 0 || !sc.endTime.isAfter(now)) {
       return;
     }
-    overlaySuperChats.add(
-      OverlaySuperChat(sc, DateTime.now().add(Duration(seconds: seconds))),
-    );
+    final displayEnd = now.add(Duration(seconds: seconds));
+    final expireAt = sc.endTime.isBefore(displayEnd) ? sc.endTime : displayEnd;
+    overlaySuperChats.add(OverlaySuperChat(sc, expireAt));
     // 不做条数裁剪：每条 SC 10 秒后自己过期，并发条数天然有上限；
     // 渲染层放不下时会从顶部渐隐，不会再被硬裁掉
     _startOverlayScTimer();
   }
 
-  /// 统一的过期清理：整个页面只有一个 Timer，UI 不再各自计时
+  /// 浮层和其他平台列表按时过期，斗鱼临时记录不维持清理定时器。
   void _startOverlayScTimer() {
     if (_overlayScTimer != null) {
       return;
@@ -1432,7 +1495,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     _overlayScTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       var now = DateTime.now();
       overlaySuperChats.removeWhere((e) => !e.expireAt.isAfter(now));
-      if (overlaySuperChats.isEmpty) {
+      removeSuperChats();
+      if (overlaySuperChats.isEmpty && !_hasExpiringSuperChats) {
         _overlayScTimer?.cancel();
         _overlayScTimer = null;
       }
@@ -1441,9 +1505,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   /// 清空画面内 SC
   void clearOverlaySuperChats() {
-    _overlayScTimer?.cancel();
-    _overlayScTimer = null;
     overlaySuperChats.clear();
+    if (!_hasExpiringSuperChats) {
+      _overlayScTimer?.cancel();
+      _overlayScTimer = null;
+    }
   }
 
   /// 读取SC
@@ -1452,12 +1518,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     try {
       var sc =
           await site.liveSite.getSuperChatMessage(roomId: detail.value!.roomId);
-      if (isClosed || generation != _roomLoadGeneration) return;
-      superChats.addAll(sc);
+      if (isClosed || _roomClosing || generation != _roomLoadGeneration) return;
       // 进房时把「B站 上还在展示期」的 SC 也放进画面，
       // 时长取剩余时间与 15 秒的较小值（已到期的不加，避免负数）
       var now = DateTime.now().millisecondsSinceEpoch;
       for (var item in sc) {
+        if (!_addSuperChat(item)) continue;
         var remain = (item.endTime.millisecondsSinceEpoch - now) ~/ 1000;
         if (remain > 0) {
           addOverlaySuperChat(
@@ -1475,15 +1541,14 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
   }
 
-  /// 移除掉已到期的SC
-  ///
-  /// 斗鱼付费留言（高能弹幕）自带展示时长（`cet`/`etimeV2` → endTime），
-  /// 到期就和 B 站 SC 一样从列表移除，不再额外保留固定 60 秒。
-  void removeSuperChats() async {
-    var now = DateTime.now().millisecondsSinceEpoch;
-    superChats.value = superChats
-        .where((x) => x.endTime.millisecondsSinceEpoch > now)
-        .toList();
+  /// 斗鱼记录到期后留在本次房间的列表中，由卡片显示「已结束」。
+  /// 其他平台维持按 endTime 移除的既有行为。
+  void removeSuperChats() {
+    if (_retainSuperChatHistory) return;
+    final now = DateTime.now();
+    if (superChats.any((sc) => !sc.endTime.isAfter(now))) {
+      superChats.removeWhere((sc) => !sc.endTime.isAfter(now));
+    }
   }
 
   /// 添加历史记录
@@ -2092,6 +2157,7 @@ ${error?.stackTrace}''');
     _roomClosing = true;
     _roomLoadGeneration++;
     _bgSubscriptionGeneration++;
+    _bgMetadataGeneration++;
     _senderLeaseGeneration++;
     _senderActive = false;
     _reconnectToken++;
@@ -2103,6 +2169,7 @@ ${error?.stackTrace}''');
     scrollController.dispose();
     autoExitTimer?.cancel();
     _liveDurationTimer?.cancel();
+    superChats.clear();
     clearOverlaySuperChats();
     if (!embedded) BackgroundPlayback.stop();
     final stopped = liveDanmaku.stop();

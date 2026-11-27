@@ -1,0 +1,21 @@
+Sanitized host/toolchain summary; device identifiers omitted
+Task: t4; attempt_id: f8b5a1b0-7013-4e3a-ac08-c0237a18cffa
+Version command: FLUTTER_SUPPRESS_ANALYTICS=true /e/Enviroment/sdk383/flutter/bin/flutter.bat --version --machine
+exitCode=0; Flutter3.38.3 stable; Dart3.10.1
+frameworkRevision=19074d12f7eaf6a8180cd4036a430c1d76de904e
+engineRevision=13e658725ddaa270601426d1485636157e38c34c
+flutterRoot=E:/Enviroment/sdk383/flutter
+PATH version commands separately reported Flutter3.32.2 / bundled Dart3.8.1; standalone Dart3.9.0-123.0.dev. These were not used for shared validation.
+Doctor command: FLUTTER_SUPPRESS_ANALYTICS=true /e/Enviroment/sdk383/flutter/bin/flutter.bat --no-version-check doctor -v
+CWD=E:/Project/simple_live/dart_simple_live
+Managed job bash-51fdc20a11c24003 collected; status=completed; detail=exit code: 0; elapsed=19.7s.
+Windows10 Pro64-bit22H2; 10.0.19045.5608
+Android SDK E:/Enviroment/Android_SDK; platform android-36.1; build-tools36.1.0
+Java OpenJDK Runtime Environment Microsoft-11369865; 17.0.15+6-LTS
+Warning: Some Android licenses not accepted. Audit did not accept licenses.
+Visual Studio Community2022 17.14.0; full17.14.36109.1
+Windows10 SDK10.0.26100.0
+Network resources check passed.
+Doctor found issues in 2 categories: PATH Flutter mismatch and Android licenses.
+xcodebuild/pod not on PATH. adb.exe found in Android SDK platform-tools despite not being on PATH.
+No native build or delivered app launch ran. Doctor exit0 is not an all-checks-pass/build/device result.

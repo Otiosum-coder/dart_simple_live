@@ -630,7 +630,8 @@ class LiveRoomPage extends GetView<LiveRoomController> {
     return Obx(() {
       final followed = controller.isFollowed;
       final special = controller.isSpecialFollow;
-      final label = followed ? (special ? '特别关注' : '已关注') : '关注';
+      const specialLabel = '特别关注';
+      final label = followed ? (special ? specialLabel : '已关注') : '关注';
       final icon = followed
           ? (special ? Icons.star_rounded : Icons.star_outline_rounded)
           : Remix.heart_line;
@@ -649,7 +650,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
           borderRadius: AppStyle.radius8,
           onTap: controller.showFollowManagement,
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
             decoration: BoxDecoration(
               borderRadius: AppStyle.radius8,
               color: Colors.transparent,
@@ -669,7 +670,10 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
-                  children: [Icon(icon), AppStyle.hGap4, content],
+                  children: [
+                    if (!followed || special) ...[Icon(icon), AppStyle.hGap4],
+                    content,
+                  ],
                 ),
               ),
             ),
@@ -755,9 +759,10 @@ class LiveRoomPage extends GetView<LiveRoomController> {
   }
 
   Widget buildMessageArea() {
-    // 斗鱼的高能弹幕（付费留言 / 语音弹幕）也走 SC 展示面
+    // 斗鱼高能弹幕、虎牙上头条复用现有 SC 展示面。
     final showSuperChat = controller.site.id == Constant.kBiliBili ||
-        controller.site.id == Constant.kDouyu;
+        controller.site.id == Constant.kDouyu ||
+        controller.site.id == Constant.kHuya;
     return Expanded(
       child: DefaultTabController(
         length: showSuperChat ? 4 : 3,
@@ -1152,6 +1157,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
             var item = controller.superChats[i];
             return SuperChatCard(
               item,
+              key: item.id.isEmpty ? ObjectKey(item) : ValueKey(item.id),
               onExpire: () {
                 controller.removeSuperChats();
               },
@@ -1227,6 +1233,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
               Obx(
                 () => SettingsSwitch(
                   title: "播放器中显示SC",
+                  subtitle: "哔哩哔哩 SC、斗鱼高能弹幕、虎牙上头条",
                   value:
                       AppSettingsController.instance.playershowSuperChat.value,
                   onChanged: (e) {

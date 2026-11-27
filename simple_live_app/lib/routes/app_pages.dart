@@ -37,6 +37,10 @@ import 'package:simple_live_app/modules/mine/account/douyu/web_login_controller.
 import 'package:simple_live_app/modules/mine/account/douyu/web_login_page.dart';
 import 'package:simple_live_app/modules/mine/account/huya/qr_login_controller.dart';
 import 'package:simple_live_app/modules/mine/account/huya/qr_login_page.dart';
+import 'package:simple_live_app/modules/mine/account/huya/huya_web_login_controller.dart';
+import 'package:simple_live_app/modules/mine/account/huya/huya_web_login_page.dart';
+import 'package:simple_live_app/modules/mine/account/huya/huya_phone_login_controller.dart';
+import 'package:simple_live_app/modules/mine/account/huya/huya_phone_login_page.dart';
 import 'package:simple_live_app/modules/mine/account/bilibili/web_login_controller.dart';
 import 'package:simple_live_app/modules/mine/account/bilibili/web_login_page.dart';
 import 'package:simple_live_app/modules/settings/appstyle_setting_page.dart';
@@ -119,7 +123,8 @@ class AppPages {
       name: RoutePath.kMultiLive,
       page: () {
         final args = Get.arguments;
-        return MultiLiveRoute(initialRoom: args is MultiLiveRoomSpec ? args : null);
+        return MultiLiveRoute(
+            initialRoom: args is MultiLiveRoomSpec ? args : null);
       },
     ),
     //弹幕设置
@@ -213,6 +218,22 @@ class AppPages {
         BindingsBuilder.put(() => HuyaQRLoginController()),
       ],
     ),
+    //虎牙手机号（短信验证码）原生登录页
+    GetPage(
+      name: RoutePath.kHuyaPhoneLogin,
+      page: () => const HuyaPhoneLoginPage(),
+      bindings: [
+        BindingsBuilder.put(() => HuyaPhoneLoginController()),
+      ],
+    ),
+    //虎牙手机号登录（旧版 WebView 方案，保留路由兼容）
+    GetPage(
+      name: RoutePath.kHuyaWebLogin,
+      page: () => const HuyaWebLoginPage(),
+      bindings: [
+        BindingsBuilder.put(() => HuyaWebLoginController()),
+      ],
+    ),
 
     // 数据同步
     GetPage(
@@ -281,7 +302,7 @@ class AppPages {
       page: () => const RemoteSyncWebDAVPage(),
       bindings: [
         BindingsBuilder.put(
-              () => RemoteSyncWebDAVController(),
+          () => RemoteSyncWebDAVController(),
         ),
       ],
     ),

@@ -87,24 +87,21 @@ class LiveMessageSpan {
   final double? imageRatio;
 
   const LiveMessageSpan.text(this.text)
-      : imageUrl = null,
-        imageScale = null,
-        imageRatio = null;
-  const LiveMessageSpan.image(
-    this.imageUrl, {
-    this.imageScale,
-    this.imageRatio,
-  }) : text = null;
+    : imageUrl = null,
+      imageScale = null,
+      imageRatio = null;
+  const LiveMessageSpan.image(this.imageUrl, {this.imageScale, this.imageRatio})
+    : text = null;
 
   bool get isImage => imageUrl != null && imageUrl!.trim().isNotEmpty;
   bool get isText => text != null && text!.isNotEmpty;
 
   Map<String, dynamic> toJson() => {
-        "text": text,
-        "imageUrl": imageUrl,
-        "imageScale": imageScale,
-        "imageRatio": imageRatio,
-      };
+    "text": text,
+    "imageUrl": imageUrl,
+    "imageScale": imageScale,
+    "imageRatio": imageRatio,
+  };
 }
 
 class LiveMessageColor {
@@ -143,18 +140,30 @@ class LiveMessageColor {
 }
 
 class LiveSuperChatMessage {
-  /// 平台侧唯一 id（斗鱼高能弹幕的 vrid），用于去重；B 站为空
+  /// 平台侧唯一 id，用于去重；虎牙还包含主播 UID，避免跨房间混用。
   final String id;
   final String userName;
   final String face;
   final String message;
   final int price;
+
+  /// 平台提供的金额/礼物标签；平台币不能直接当作人民币显示。
+  /// 为空时沿用 B 站和斗鱼的人民币金额展示。
+  final String? priceLabel;
+
+  String get displayPrice {
+    final label = priceLabel?.trim();
+    if (label != null && label.isNotEmpty) return label;
+    return price > 0 ? "￥$price" : "免费";
+  }
+
   final DateTime startTime;
   final DateTime endTime;
   final String backgroundColor;
   final String backgroundBottomColor;
   LiveSuperChatMessage({
     this.id = "",
+    this.priceLabel,
     required this.backgroundBottomColor,
     required this.backgroundColor,
     required this.endTime,
@@ -173,8 +182,9 @@ class LiveSuperChatMessage {
       "face": face,
       "message": message,
       "price": price,
-      "startTime": startTime,
-      "endTime": endTime,
+      "priceLabel": priceLabel,
+      "startTime": startTime.toIso8601String(),
+      "endTime": endTime.toIso8601String(),
       "backgroundColor": backgroundColor,
       "backgroundBottomColor": backgroundBottomColor,
     });

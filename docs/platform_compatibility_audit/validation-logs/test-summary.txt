@@ -1,0 +1,15 @@
+Curated execution evidence — not a complete raw log
+Task: t4; attempt_id: f8b5a1b0-7013-4e3a-ac08-c0237a18cffa
+CWD: E:/Project/simple_live/dart_simple_live/simple_live_app
+Command: FLUTTER_SUPPRESS_ANALYTICS=true /e/Enviroment/sdk383/flutter/bin/flutter.bat test --no-pub
+Outcome: foreground completed; exitCode=1; timedOut=false.
+Final retained line: 00:38 +328 -1: Some tests failed.
+Sole failing test: test/widget_test.dart:14 Counter increments smoke test
+At test/widget_test.dart:16: await tester.pumpWidget(const MyApp());
+Retained error: "AppSettingsController" not found. You need to call "Get.put(AppSettingsController())" or "Get.lazyPut(()=>AppSettingsController())"
+Causal source: lib/main.dart:185 MyApp.build reads AppSettingsController.instance.isDynamic.value.
+Follow-on assertion at test/widget_test.dart:19: expected exactly one matching candidate, found 0 widgets with text 0; multiple exceptions (2).
+This does not establish production startup failure; the test bypasses main initialization and assumes obsolete counter UI.
+Original stdout was tool-truncated. Only retained evidence is preserved here; this is not a reconstructed complete log. No rerun was performed for extra output.
+No missing generated/native asset failure was observed in retained output. Existing cache/config only; no clean-checkout native build.
+No native OS builds, delivered app startup, real media backend, permission dialogs or physical devices were exercised.

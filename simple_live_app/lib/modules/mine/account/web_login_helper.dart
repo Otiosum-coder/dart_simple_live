@@ -31,13 +31,17 @@ class WebLoginCookieHelper {
 
   /// 退出登录后重新打开 Web 登录时先清掉登录态。
   /// 否则 WebView 里还留着上次的 Cookie，会直接自动登录上一个账号。
-  Future<void> clear(List<String> urls) async {
+  Future<void> clear(List<String> urls, {bool deep = true}) async {
     for (final url in urls) {
       try {
         await _cookieManager.deleteCookies(url: WebUri(url));
       } catch (e) {
         Log.logPrint(e);
       }
+    }
+    // deep=false 时只删指定域名的 Cookie，避免把其它平台的登录态一起清掉
+    if (!deep) {
+      return;
     }
     // 兜底：平台常把 Cookie 写到父域（.huya.com 等），逐域删可能漏，
     // 直接清空 WebView 全部 Cookie 与本地存储，确保不会自动登录旧账号

@@ -1,7 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/app_style.dart';
 import 'package:simple_live_app/modules/mine/account/huya/qr_login_controller.dart';
+import 'package:simple_live_app/routes/route_path.dart';
 
 class HuyaQRLoginPage extends GetView<HuyaQRLoginController> {
   const HuyaQRLoginPage({Key? key}) : super(key: key);
@@ -9,7 +12,18 @@ class HuyaQRLoginPage extends GetView<HuyaQRLoginController> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("虎牙账号登录")),
+      appBar: AppBar(
+        title: const Text("虎牙账号登录"),
+        actions: [
+          if ((Platform.isAndroid || Platform.isIOS) &&
+              MediaQuery.of(context).orientation == Orientation.portrait)
+            TextButton.icon(
+              onPressed: () => Get.offNamed(RoutePath.kHuyaPhoneLogin),
+              icon: const Icon(Icons.phone_iphone),
+              label: const Text("手机号登录"),
+            ),
+        ],
+      ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisAlignment: MainAxisAlignment.center,

@@ -6,6 +6,8 @@ import 'package:crypto/crypto.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 import 'package:simple_live_core/src/common/web_socket_util.dart';
 import 'package:simple_live_core/src/danmaku/huya_emoticon.dart';
+import 'package:simple_live_core/src/danmaku/huya_headline_client.dart';
+import 'package:simple_live_core/src/danmaku/huya_superchat.dart';
 import 'package:simple_live_core/src/model/tars/huya_danmaku.dart';
 import 'package:tars_dart/tars/codec/tars_input_stream.dart';
 import 'package:tars_dart/tars/codec/tars_output_stream.dart';
@@ -16,12 +18,16 @@ class HuyaDanmakuArgs {
   final int topSid;
   final int subSid;
 
+  /// 主播用户 UID（tProfileInfo.lUid），与频道 ID / YY 号不是同一字段。
+  final int presenterUid;
+
   /// 登录 Cookie（空 = 未登录，只能看弹幕不能发）
   final String cookie;
   HuyaDanmakuArgs({
     required this.ayyuid,
     required this.topSid,
     required this.subSid,
+    this.presenterUid = 0,
     this.cookie = "",
   });
   @override
@@ -30,6 +36,7 @@ class HuyaDanmakuArgs {
       "ayyuid": ayyuid,
       "topSid": topSid,
       "subSid": subSid,
+      "presenterUid": presenterUid,
       "logined": cookie.isNotEmpty,
     });
   }
@@ -65,7 +72,6 @@ class _HuyaSendUserInfo extends TarsStruct {
   @override
   void displayAsString(StringBuffer sb, int level) {}
 }
-
 
 /// 发送 body 的 tag10（抓包是 3 个零字段的结构）
 class _HuyaSendTail extends TarsStruct {
@@ -134,6 +140,7 @@ class _HuyaPalette extends TarsStruct {
   @override
   void displayAsString(StringBuffer sb, int level) {}
 }
+
 /// 虎牙 sendMessage 请求体（body.tReq）
 class _HuyaSendBody extends TarsStruct {
   int presenterUid = 0;
@@ -257,6 +264,16 @@ class _HuyaLaunchTReq extends TarsStruct {
 }
 
 class HuyaDanmaku implements LiveDanmaku {
+  HuyaDanmaku({
+    HuyaHeadlineLoader? headlineLoader,
+    DateTime Function()? superChatNow,
+  }) : _headlineLoader = headlineLoader ?? fetchHuyaHeadlines,
+       _superChats = HuyaSuperChatDecoder(now: superChatNow);
+
+  final HuyaHeadlineLoader _headlineLoader;
+  final HuyaSuperChatDecoder _superChats;
+  int _headlineGeneration = 0;
+
   @override
   int heartbeatTime = 60 * 1000;
 
@@ -272,11 +289,16 @@ class HuyaDanmaku implements LiveDanmaku {
 
   final heartbeatData = base64.decode("ABQdAAwsNgBM");
 
-  late HuyaDanmakuArgs danmakuArgs;
+  HuyaDanmakuArgs danmakuArgs = HuyaDanmakuArgs(
+    ayyuid: 0,
+    topSid: 0,
+    subSid: 0,
+  );
 
   /// 发送专用连接（网页同款 -ws.va + wsLaunch）；
   /// 接收继续走 cdnws，两条连接互不影响
   WebScoketUtils? _sendSocket;
+  bool _running = false;
 
   /// 自己的 yyuid / guid（从 Cookie 解析，发送弹幕要用）
   int selfUid = 0;
@@ -290,6 +312,10 @@ class HuyaDanmaku implements LiveDanmaku {
   @override
   Future start(dynamic args) async {
     danmakuArgs = args as HuyaDanmakuArgs;
+    _running = true;
+    _headlineGeneration++;
+    _superChats.clear();
+    unawaited(loadSuperChats());
     // 游客目录独立于账号和 WS，后台加载，不拖慢进房或弹幕连接。
     unawaited(HuyaEmoticon.load());
     selfUid = int.tryParse(_cookieValue("udb_uid")) ?? 0;
@@ -324,13 +350,16 @@ class HuyaDanmaku implements LiveDanmaku {
     );
     webScoketUtils?.connect();
 
-    // ② 发送连接：网页同款 -ws.va（必须先 wsLaunch 进房，再发 sendMessage）
-    //    收发分离：即使发送通道有问题，也不影响收弹幕
+    _connectSendSocket();
+  }
+
+  void _connectSendSocket() {
+    _sendSocket?.close();
+    _sendSocket = null;
+    // 发送凭据轮换只重建发送连接，保留接收连接和房间状态。
     if (selfUid > 0 && guid.isNotEmpty) {
       var wsUrl = buildWsUrl();
-      CoreLog.d(
-        "虎牙发送连接：${wsUrl.split("?baseinfo=").first}",
-      );
+      CoreLog.d("虎牙发送连接：${wsUrl.split("?baseinfo=").first}");
       _sendSocket = WebScoketUtils(
         url: wsUrl,
         heartBeatTime: heartbeatTime,
@@ -348,6 +377,35 @@ class HuyaDanmaku implements LiveDanmaku {
       _sendSocket?.connect();
     }
   }
+
+  /// 账号服务接受新 Cookie 后同步已有房间，不重新进房或自动重发消息。
+  void updateCookie(String cookie) {
+    if (danmakuArgs.cookie == cookie) return;
+    final previous = danmakuArgs;
+    danmakuArgs = HuyaDanmakuArgs(
+      ayyuid: previous.ayyuid,
+      topSid: previous.topSid,
+      subSid: previous.subSid,
+      presenterUid: previous.presenterUid,
+      cookie: cookie,
+    );
+    selfUid =
+        int.tryParse(_cookieValue('udb_uid')) ??
+        int.tryParse(_cookieValue('yyuid')) ??
+        0;
+    guid = _cookieValue('guid');
+    final pending = _sendCompleter;
+    if (pending != null && !pending.isCompleted) {
+      pending.complete('登录状态已更新，请确认上一条发送结果后重试');
+    }
+    if (_running) _connectSendSocket();
+  }
+
+  /// 仅识别已知的精确业务错误码；其它 biz exception 或包含 905 的文本不代表掉线。
+  static bool isSessionExpiredError(String description) => RegExp(
+    r'\bbiz\s+exception\s*:\s*905\b',
+    caseSensitive: false,
+  ).hasMatch(description);
 
   /// 从登录 Cookie 里取字段值
   String _cookieValue(String key) {
@@ -478,9 +536,65 @@ class HuyaDanmaku implements LiveDanmaku {
   }
 
   void joinRoom() {
-    var joinData =
-        getJoinData(danmakuArgs.ayyuid, danmakuArgs.topSid, danmakuArgs.topSid);
+    var joinData = getJoinData(
+      danmakuArgs.ayyuid,
+      danmakuArgs.topSid,
+      danmakuArgs.topSid,
+    );
     webScoketUtils?.sendMessage(joinData);
+    final groups = getGroupData(danmakuArgs.presenterUid);
+    if (groups.isNotEmpty) webScoketUtils?.sendMessage(groups);
+  }
+
+  /// 头条广播下发到 live:<主播 UID>；不能用频道号或 YY 号订阅。
+  List<int> getGroupData(int presenterUid) {
+    if (presenterUid <= 0) return [];
+    // 普通弹幕已由旧频道注册接收，再订阅 chat 分组会重复收到同一条弹幕。
+    final request = TarsOutputStream()..write(['live:$presenterUid'], 0);
+    final frame = TarsOutputStream()
+      ..write(16, 0)
+      ..write(request.toUint8List(), 1);
+    return frame.toUint8List();
+  }
+
+  /// 首次列表和实时广播共用解码器，收到相同头条不会重复弹出。
+  Future<void> loadSuperChats() async {
+    final generation = _headlineGeneration;
+    final args = danmakuArgs;
+    if (args.presenterUid <= 0) return;
+    try {
+      final response = await _headlineLoader(args.presenterUid);
+      if (generation != _headlineGeneration ||
+          !identical(args, danmakuArgs) ||
+          onMessage == null) {
+        return;
+      }
+      _emitSuperChats(
+        _superChats.decodeInitialResponse(
+          response,
+          presenterUid: args.presenterUid,
+        ),
+      );
+    } catch (e) {
+      // 头条失败不能阻止普通弹幕，也不把接口错误当成断线重连。
+      if (generation == _headlineGeneration) {
+        CoreLog.w('虎牙头条列表读取失败：$e');
+      }
+    }
+  }
+
+  void _emitSuperChats(List<LiveSuperChatMessage> messages) {
+    for (final sc in messages) {
+      onMessage?.call(
+        LiveMessage(
+          type: LiveMessageType.superChat,
+          userName: sc.userName,
+          message: sc.message,
+          color: LiveMessageColor.white,
+          data: sc,
+        ),
+      );
+    }
   }
 
   List<int> getJoinData(int ayyuid, int tid, int sid) {
@@ -609,10 +723,64 @@ class HuyaDanmaku implements LiveDanmaku {
 
   @override
   Future stop() async {
+    _running = false;
+    _headlineGeneration++;
+    _superChats.clear();
     onMessage = null;
     onClose = null;
     webScoketUtils?.close();
     _sendSocket?.close();
+  }
+
+  void _dispatchPush(int uri, List<int> payload, String groupId) {
+    if (uri == HuyaSuperChatDecoder.messageUri) {
+      // HYPushMessage tag4=sGroupId；条目里的用户房间号不是路由。
+      final presenterUid = danmakuArgs.presenterUid;
+      if (presenterUid > 0 && groupId == 'live:$presenterUid') {
+        _emitSuperChats(
+          _superChats.decodePanel(payload, presenterUid: presenterUid),
+        );
+      }
+    } else if (uri == 1400) {
+      HYMessage messageNotice = HYMessage();
+      messageNotice.readFrom(TarsInputStream(Uint8List.fromList(payload)));
+      var uname = messageNotice.userInfo.nickName;
+      var content = messageNotice.content;
+
+      var color = messageNotice.bulletFormat.fontColor;
+
+      // 正文里的 [大笑] / /{dx 之类标记换成图片表情
+      final spans = HuyaEmoticon.parseSpans(content);
+      onMessage?.call(
+        LiveMessage(
+          type: LiveMessageType.chat,
+          color: color <= 0
+              ? LiveMessageColor.white
+              : LiveMessageColor.numberToColor(color),
+          message: content,
+          userName: uname,
+          spans: spans,
+          imageUrls: spans
+              ?.where((e) => e.isImage)
+              .map((e) => e.imageUrl!)
+              .toList(),
+          isRoomEmoji: spans != null && HuyaEmoticon.isOnlyEmoticon(spans),
+        ),
+      );
+    } else if (uri == 8006) {
+      int online = 0;
+      var s = TarsInputStream(Uint8List.fromList(payload));
+      online = s.read(online, 0, false);
+      onMessage?.call(
+        LiveMessage(
+          type: LiveMessageType.online,
+          data: online,
+          color: LiveMessageColor.white,
+          message: "",
+          userName: "",
+        ),
+      );
+    }
   }
 
   void decodeMessage(List<int> data) {
@@ -621,56 +789,29 @@ class HuyaDanmaku implements LiveDanmaku {
       var type = stream.read(0, 0, false);
       if (type == 7) {
         stream = TarsInputStream(stream.readBytes(1, false));
-        HYPushMessage wSPushMessage = HYPushMessage();
-        wSPushMessage.readFrom(stream);
-        if (wSPushMessage.uri == 1400) {
-          HYMessage messageNotice = HYMessage();
-          messageNotice
-              .readFrom(TarsInputStream(Uint8List.fromList(wSPushMessage.msg)));
-          var uname = messageNotice.userInfo.nickName;
-          var content = messageNotice.content;
-
-          var color = messageNotice.bulletFormat.fontColor;
-
-          // 正文里的 [大笑] / /{dx 之类标记换成图片表情
-          final spans = HuyaEmoticon.parseSpans(content);
-          onMessage?.call(
-            LiveMessage(
-              type: LiveMessageType.chat,
-              color: color <= 0
-                  ? LiveMessageColor.white
-                  : LiveMessageColor.numberToColor(color),
-              message: content,
-              userName: uname,
-              spans: spans,
-              imageUrls: spans
-                  ?.where((e) => e.isImage)
-                  .map((e) => e.imageUrl!)
-                  .toList(),
-              isRoomEmoji:
-                  spans != null && HuyaEmoticon.isOnlyEmoticon(spans),
-            ),
-          );
-        } else if (wSPushMessage.uri == 8006) {
-          int online = 0;
-          var s = TarsInputStream(Uint8List.fromList(wSPushMessage.msg));
-          online = s.read(online, 0, false);
-          onMessage?.call(
-            LiveMessage(
-              type: LiveMessageType.online,
-              data: online,
-              color: LiveMessageColor.white,
-              message: "",
-              userName: "",
-            ),
-          );
+        final push = HYPushMessage()..readFrom(stream);
+        final group = push.uri == HuyaSuperChatDecoder.messageUri
+            ? stream.readString(4, false)
+            : '';
+        _dispatchPush(push.uri, push.msg, group);
+      } else if (type == 22) {
+        final batch = _HuyaPushBatch()
+          ..readFrom(TarsInputStream(stream.readBytes(1, false)));
+        for (final item in batch.items) {
+          try {
+            _dispatchPush(item.uri, item.payload, batch.groupId);
+          } catch (e) {
+            // 一个损坏的业务包不能吞掉同批次后面的普通弹幕。
+            CoreLog.error(e);
+          }
         }
       } else if (type == 4) {
         // 通用调用的回执：cmdId=4，payload 里 tag4=序号、tag6=方法名。
         // 注意 payload 可能带 4 字节大端长度前缀（浏览器回执就是这种），要先剥掉
         var payload = stream.readBytes(1, false);
         if (payload.length >= 4) {
-          var prefixLength = (payload[0] << 24) |
+          var prefixLength =
+              (payload[0] << 24) |
               (payload[1] << 16) |
               (payload[2] << 8) |
               payload[3];
@@ -694,10 +835,8 @@ class HuyaDanmaku implements LiveDanmaku {
               error = "发送失败（服务端返回错误）";
             }
           }
-          // 905（wup request biz exception:905）= 登录态失效，给中文提示
-          if ((error != null &&
-                  (error.contains("905") || error.contains("biz exception"))) ||
-              text.contains(":905")) {
+          // 已知凭据失效回执归一化；未知业务错误继续展示原始原因。
+          if (error != null && isSessionExpiredError(error)) {
             error = "虎牙登录已失效，请重新登录";
           }
           _sendCompleter?.complete(error);
@@ -707,4 +846,41 @@ class HuyaDanmaku implements LiveDanmaku {
       CoreLog.error(e);
     }
   }
+}
+
+// 官网 WSPushMessage_V2：tag0 分组，tag1 为不同 URI 的业务消息列表。
+class _HuyaPushBatch extends TarsStruct {
+  String groupId = '';
+  List<_HuyaPushItem> items = [];
+
+  @override
+  void readFrom(TarsInputStream stream) {
+    groupId = stream.readString(0, false);
+    items = stream.readList<_HuyaPushItem>([_HuyaPushItem()], 1, false);
+  }
+
+  @override
+  Object deepCopy() => _HuyaPushBatch();
+  @override
+  void writeTo(TarsOutputStream stream) {}
+  @override
+  void displayAsString(StringBuffer buffer, int level) {}
+}
+
+class _HuyaPushItem extends TarsStruct {
+  int uri = 0;
+  List<int> payload = [];
+
+  @override
+  void readFrom(TarsInputStream stream) {
+    uri = stream.readInt(0, false);
+    payload = stream.readBytes(1, false);
+  }
+
+  @override
+  Object deepCopy() => _HuyaPushItem();
+  @override
+  void writeTo(TarsOutputStream stream) {}
+  @override
+  void displayAsString(StringBuffer buffer, int level) {}
 }

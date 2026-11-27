@@ -10,10 +10,13 @@ class SuperChatCard extends StatefulWidget {
   final LiveSuperChatMessage message;
   final Function()? onExpire;
   final int? customCountdown;
+  @visibleForTesting
+  final DateTime Function()? now;
   const SuperChatCard(
     this.message, {
     required this.onExpire,
     this.customCountdown,
+    this.now,
     Key? key,
   }) : super(key: key);
 
@@ -21,8 +24,10 @@ class SuperChatCard extends StatefulWidget {
   State<SuperChatCard> createState() => _SuperChatCardState();
 }
 
-class _SuperChatCardState extends State<SuperChatCard> {
-  late Timer timer;
+class _SuperChatCardState extends State<SuperChatCard>
+    with WidgetsBindingObserver {
+  Timer? timer;
+  bool _expiryNotified = false;
 
   int countdown = 0;
 
@@ -31,38 +36,68 @@ class _SuperChatCardState extends State<SuperChatCard> {
 
   @override
   void initState() {
-    var currentTime = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _resetCountdown();
+  }
+
+  @override
+  void didUpdateWidget(covariant SuperChatCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.message, widget.message)) {
+      _expiryNotified = false;
+      _resetCountdown();
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // 后台挂起期间 Timer 可能停走，返回时按平台截止时间校准。
+      setState(_resetCountdown);
+    }
+  }
+
+  void _resetCountdown() {
+    timer?.cancel();
+    timer = null;
+    final currentTime =
+        (widget.now?.call() ?? DateTime.now()).millisecondsSinceEpoch ~/ 1000;
     var endTime = widget.message.endTime.millisecondsSinceEpoch ~/ 1000;
 
     // 不能为负数：进房时批量拉回的历史 SC，endTime 往往已经过去
     countdown = endTime - currentTime;
-    if (countdown <= 0) {
+    expired = countdown <= 0;
+    if (expired) {
       countdown = 0;
-      expired = true;
-      // 首帧就请求移除，避免先渲染出 -2 这种数字
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        widget.onExpire?.call();
-      });
-    }
-
-    timer = Timer.periodic(const Duration(seconds: 1), timerCallback);
-
-    super.initState();
-  }
-
-  void timerCallback(e) {
-    if (countdown <= 0) {
-      widget.onExpire?.call();
-      timer.cancel();
+      _notifyExpiry();
       return;
     }
 
-    setState(() {
-      countdown -= 1;
-      if (countdown <= 0) {
-        expired = true;
+    timer = Timer.periodic(const Duration(seconds: 1), timerCallback);
+  }
+
+  void _notifyExpiry() {
+    if (_expiryNotified) return;
+    _expiryNotified = true;
+    final message = widget.message;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && identical(widget.message, message)) {
+        widget.onExpire?.call();
       }
     });
+  }
+
+  void timerCallback(Timer timer) {
+    setState(() {
+      countdown = (countdown - 1).clamp(0, 1 << 30);
+      expired = countdown == 0;
+    });
+    if (expired) {
+      timer.cancel();
+      this.timer = null;
+      _notifyExpiry();
+    }
   }
 
   @override
@@ -102,9 +137,7 @@ class _SuperChatCardState extends State<SuperChatCard> {
                           ),
                         ),
                         Text(
-                          widget.message.price > 0
-                              ? "￥${widget.message.price}"
-                              : "免费",
+                          widget.message.displayPrice,
                           style: const TextStyle(
                             fontSize: 12,
                             color: Colors.grey,
@@ -142,7 +175,8 @@ class _SuperChatCardState extends State<SuperChatCard> {
 
   @override
   void dispose() {
-    timer.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    timer?.cancel();
     super.dispose();
   }
 }

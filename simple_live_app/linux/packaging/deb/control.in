@@ -1,0 +1,9 @@
+Package: simple-live
+Version: @VERSION@
+Section: x11
+Priority: optional
+Architecture: amd64
+Maintainer: Otiosum-coder <201517592+Otiosum-coder@users.noreply.github.com>
+Depends: libgtk-3-0 | libgtk-3-0t64, libmpv2 | libmpv1, libasound2 | libasound2t64
+Description: Simple Live desktop application
+ A desktop client for watching live streams.

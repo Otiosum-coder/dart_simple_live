@@ -10,6 +10,7 @@ import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/modules/mine/account/huya/huya_udb_request.dart';
 import 'package:simple_live_app/requests/http_client.dart';
 import 'package:simple_live_app/services/huya_account_service.dart';
+import 'package:simple_live_app/services/huya_cookie_harvester.dart';
 
 enum HuyaQRStatus {
   loading,
@@ -45,7 +46,7 @@ class HuyaQRLoginController extends GetxController {
   static const String userAgent =
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
-  /// 二维码有效期（秒）。虎牙前端没给明确时长，按 3 分钟处理。
+  /// 二维码本地轮询超时（秒），与登录会话有效期无关。
   static const int expireSeconds = 300;
 
   static const Duration pollInterval = Duration(milliseconds: 1500);
@@ -109,10 +110,9 @@ class HuyaQRLoginController extends GetxController {
   DateTime? _startTime;
 
   /// 简易 Cookie 容器，保证「取二维码」和「轮询」是同一个会话
-  final Map<String, String> _jar = {};
+  final HuyaCookieJar _jar = HuyaCookieJar();
 
-  String get _cookieHeader =>
-      _jar.entries.map((e) => '${e.key}=${e.value}').join('; ');
+  String get _cookieHeader => _jar.headerFor(Uri.parse(HuyaUdbRequest.baseUrl));
 
   Map<String, String> _headersFor(String uri, String reqid) => {
         "accept": "*/*",
@@ -127,15 +127,8 @@ class HuyaQRLoginController extends GetxController {
         if (_jar.isNotEmpty) "cookie": _cookieHeader,
       };
 
-  void _collectCookies(Headers headers) {
-    headers["set-cookie"]?.forEach((element) {
-      var item = element.split(';').first.trim();
-      var index = item.indexOf('=');
-      if (index <= 0) {
-        return;
-      }
-      _jar[item.substring(0, index).trim()] = item.substring(index + 1).trim();
-    });
+  void _collectCookies(Headers headers, Uri source) {
+    _jar.collect(headers['set-cookie'] ?? const [], source);
   }
 
   Map _asMap(dynamic value) {
@@ -185,7 +178,7 @@ class HuyaQRLoginController extends GetxController {
         headers: _headersFor(uri, reqid),
       ),
     );
-    _collectCookies(response.headers);
+    _collectCookies(response.headers, response.realUri);
     return _asMap(response.data);
   }
 
@@ -200,11 +193,11 @@ class HuyaQRLoginController extends GetxController {
           validateStatus: (status) => status != null && status < 500,
           headers: {
             "user-agent": userAgent,
-            if (_jar.isNotEmpty) "cookie": _cookieHeader,
+            if (_jar.isNotEmpty) "cookie": _jar.headerFor(Uri.parse(url)),
           },
         ),
       );
-      _collectCookies(response.headers);
+      _collectCookies(response.headers, response.realUri);
     } catch (e) {
       Log.logPrint(e);
     }
@@ -255,6 +248,7 @@ class HuyaQRLoginController extends GetxController {
           },
         ),
       );
+      _collectCookies(imageResponse.headers, imageResponse.realUri);
       var bytes = imageResponse.data as List<int>?;
       if (bytes == null || bytes.isEmpty) {
         throw "二维码图片为空";
@@ -363,8 +357,9 @@ class HuyaQRLoginController extends GetxController {
       if (!_jar.containsKey("udb_uid")) {
         throw "未能获取登录 Cookie，请改用「Web登录」或「Cookie登录」";
       }
-      var cookieStr = _jar.entries.map((e) => '${e.key}=${e.value}').join(';');
-      HuyaAccountService.instance.setCookie(cookieStr, freshLogin: true);
+      var cookieStr = _jar.header;
+      await HuyaAccountService.instance.setCookie(cookieStr,
+          freshLogin: true, cookieMetadata: _jar.metadata);
       if (!HuyaAccountService.instance.logined.value) {
         HuyaAccountService.instance.logout();
         throw "登录态不完整，请改用「Web登录」或「Cookie登录」";

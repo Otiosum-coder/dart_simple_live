@@ -1,7 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/utils.dart';
+import 'package:simple_live_app/modules/mine/account/huya/huya_web_login_support.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/huya_account_service.dart';
 
@@ -25,6 +28,21 @@ void showHuyaLoginSheet() {
             Get.toNamed(RoutePath.kHuyaQRLogin);
           },
         ),
+        if (HuyaWebLoginSupport.showPhoneEntry(
+          isMobile: Platform.isAndroid || Platform.isIOS,
+          isPortrait:
+              MediaQuery.of(Get.context!).orientation == Orientation.portrait,
+        ))
+          ListTile(
+            leading: const Icon(Icons.phone_iphone),
+            title: const Text("手机号登录"),
+            subtitle: const Text("短信验证码登录（原生页面，无需跳转网页）"),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Get.back();
+              Get.toNamed(RoutePath.kHuyaPhoneLogin);
+            },
+          ),
         ListTile(
           leading: const Icon(Icons.edit_outlined),
           title: const Text("Cookie登录"),
@@ -55,8 +73,7 @@ Future showHuyaCookieDialog() async {
   cookie = Utils.extractCookieFromText(cookie);
   HuyaAccountService.instance.setCookie(cookie);
   if (HuyaAccountService.instance.logined.value) {
-    SmartDialog.showToast(
-        "虎牙登录成功：${HuyaAccountService.instance.name.value}");
+    SmartDialog.showToast("虎牙登录成功：${HuyaAccountService.instance.name.value}");
   } else {
     SmartDialog.showToast("Cookie 里缺少 udb_uid，登录态可能不完整");
   }

@@ -7,9 +7,9 @@ name: build-manual
 #
 # 各平台说明：
 #   Android  ：正式签名（需配置 KEYSTORE_BASE64 等 secrets，否则为 debug 签名）
-#   Windows  ：预下载 mpv/ANGLE 运行库，规避 CI 上下载抖动；固定 windows-2022 规避 VS18 的 C2338
-#   Linux    ：需要系统 libmpv；产物为 zip
-#   macOS    ：产物（macos-15 = Apple Silicon / macos-15-intel = x86_64），仅手动触发；未公证，首次打开需右键 → 打开
+#   Windows  ：预下载 mpv/ANGLE 运行库，规避 CI 上下载抖动；固定 windows-2022 规避 VS18 的 C2338；产出 zip + Setup.exe
+#   Linux    ：需要系统 libmpv；同时产出 zip + amd64 deb
+#   macOS    ：macos-15 = Apple Silicon / macos-15-intel = x86_64；仅手动触发，产出 zip + dmg；未公证，首次打开需右键 → 打开
 #   iOS      ：未签名 ipa，需用 AltStore / Sideloadly 等工具自签安装
 on:
   workflow_dispatch:
@@ -19,15 +19,15 @@ on:
         type: boolean
         default: true
       build_windows:
-        description: "构建 Windows (EXE)"
+        description: "构建 Windows (zip + Setup.exe)"
         type: boolean
         default: true
       build_linux:
-        description: "构建 Linux (zip)"
+        description: "构建 Linux (zip + deb)"
         type: boolean
         default: false
       build_macos:
-        description: "构建 macOS (arm64 zip)"
+        description: "构建 macOS (arm64/x64 zip + dmg)"
         type: boolean
         default: false
       build_ios:
@@ -211,11 +211,30 @@ jobs:
           Compress-Archive -Path "$src/*" -DestinationPath $zip -Force
           Get-Item $zip | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
 
+      - name: 安装 Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 构建 Windows 安装程序
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.version.outputs.VERSION }}"
+          $src = (Resolve-Path "simple_live_app/build/windows/x64/runner/Release").Path
+          $output = (Get-Location).Path
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "找不到 Inno Setup 编译器：$iscc" }
+          & $iscc "/DAppVersion=$ver" "/DAppSourceDir=$src" "/DOutputDir=$output" "simple_live_app/windows/packaging/SimpleLive.iss"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: 上传 Windows（Artifacts）
         uses: actions/upload-artifact@v4
         with:
           name: windows-exe-${{ steps.version.outputs.VERSION }}
-          path: SimpleLive-*-windows-x64.zip
+          path: |
+            SimpleLive-*-windows-x64.zip
+            SimpleLive-*-windows-x64-setup.exe
           if-no-files-found: error
 
       - name: 上传到 Release
@@ -226,7 +245,7 @@ jobs:
         run: |
           $tag = "${env:GITHUB_REF_NAME}"
           gh release view $tag 2>$null | Out-Null; if ($LASTEXITCODE -ne 0) { gh release create $tag --generate-notes --title $tag }
-          gh release upload $tag (Get-ChildItem "SimpleLive-*-windows-x64.zip").FullName --clobber
+          gh release upload $tag "SimpleLive-${{ steps.version.outputs.VERSION }}-windows-x64.zip" "SimpleLive-${{ steps.version.outputs.VERSION }}-windows-x64-setup.exe" --clobber
 
   # ---------------------------------------------------------------- Linux
   build-linux:
@@ -271,11 +290,18 @@ jobs:
           cd simple_live_app/build/linux/x64/release
           zip -r "SimpleLive-${{ steps.version.outputs.VERSION }}-linux-x64.zip" bundle
 
+      - name: 打包 Debian 安装包
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: bash simple_live_app/linux/packaging/deb/build_deb.sh "$VERSION" "simple_live_app/build/linux/x64/release"
+
       - name: 上传 Linux（Artifacts）
         uses: actions/upload-artifact@v4
         with:
           name: linux-${{ steps.version.outputs.VERSION }}
-          path: simple_live_app/build/linux/x64/release/*.zip
+          path: |
+            simple_live_app/build/linux/x64/release/*.zip
+            simple_live_app/build/linux/x64/release/*.deb
           if-no-files-found: error
 
       - name: 上传到 Release
@@ -284,7 +310,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || gh release create "${GITHUB_REF_NAME}" --generate-notes --title "${GITHUB_REF_NAME}" || true
-          gh release upload "${GITHUB_REF_NAME}" simple_live_app/build/linux/x64/release/*.zip --clobber
+          gh release upload "${GITHUB_REF_NAME}" simple_live_app/build/linux/x64/release/*.zip simple_live_app/build/linux/x64/release/*.deb --clobber
 
   # ---------------------------------------------------------------- macOS
   build-macos:
@@ -345,11 +371,23 @@ jobs:
           cd simple_live_app/build/macos/Build/Products/Release
           zip -q -r -y "SimpleLive-${{ steps.version.outputs.VERSION }}-macos-${{ matrix.arch }}.zip" *.app
 
+      - name: 打包为 dmg（包含 Applications 快捷方式）
+        run: |
+          set -euo pipefail
+          cd simple_live_app/build/macos/Build/Products/Release
+          dmg_root="$(mktemp -d)"
+          trap 'rm -rf "$dmg_root"' EXIT
+          ditto "Simple Live.app" "$dmg_root/Simple Live.app"
+          ln -s /Applications "$dmg_root/Applications"
+          hdiutil create -volname "Simple Live" -srcfolder "$dmg_root" -ov -format UDZO "SimpleLive-${{ steps.version.outputs.VERSION }}-macos-${{ matrix.arch }}.dmg"
+
       - name: 上传 macOS（Artifacts）
         uses: actions/upload-artifact@v4
         with:
           name: macos-${{ matrix.arch }}-${{ steps.version.outputs.VERSION }}
-          path: simple_live_app/build/macos/Build/Products/Release/*.zip
+          path: |
+            simple_live_app/build/macos/Build/Products/Release/*.zip
+            simple_live_app/build/macos/Build/Products/Release/*.dmg
           if-no-files-found: error
 
       - name: 上传到 Release
@@ -358,7 +396,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || gh release create "${GITHUB_REF_NAME}" --generate-notes --title "${GITHUB_REF_NAME}" || true
-          gh release upload "${GITHUB_REF_NAME}" simple_live_app/build/macos/Build/Products/Release/*.zip --clobber
+          gh release upload "${GITHUB_REF_NAME}" simple_live_app/build/macos/Build/Products/Release/*.zip simple_live_app/build/macos/Build/Products/Release/*.dmg --clobber
 
   # ---------------------------------------------------------------- iOS
   build-ios:

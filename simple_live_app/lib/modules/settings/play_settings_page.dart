@@ -149,6 +149,7 @@ class PlaySettingsPage extends GetView<AppSettingsController> {
                 Obx(
                   () => SettingsSwitch(
                     title: "播放器中显示SC",
+                    subtitle: "哔哩哔哩 SC、斗鱼高能弹幕、虎牙上头条",
                     value: controller.playershowSuperChat.value,
                     onChanged: (e) {
                       controller.setPlayerShowSuperChat(e);

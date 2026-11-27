@@ -476,6 +476,7 @@ class HuyaSite implements LiveSite {
         ayyuid: tLiveInfo["lYyid"] ?? 0,
         topSid: topSid ?? 0,
         subSid: subSid ?? 0,
+        presenterUid: int.tryParse(tProfileInfo["lUid"]?.toString() ?? "") ?? 0,
         // 发送弹幕需要登录 Cookie（udb_uid / guid 从里面解析）
         cookie: cookie,
       ),

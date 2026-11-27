@@ -18,7 +18,10 @@ import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.os.SystemClock
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -134,6 +137,10 @@ class PlaybackService : Service() {
     private var artworkBitmap: Bitmap? = null
     private var playbackState: Int = PlaybackState.STATE_PAUSED
     private var isForeground = false
+    private val durationHandler = Handler(Looper.getMainLooper())
+    private val durationRefresh = Runnable {
+        if (isForeground) publish()
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -191,6 +198,7 @@ class PlaybackService : Service() {
     }
 
     override fun onDestroy() {
+        durationHandler.removeCallbacks(durationRefresh)
         mediaSession?.isActive = false
         mediaSession?.release()
         mediaSession = null
@@ -297,12 +305,21 @@ class PlaybackService : Service() {
     }
 
     private fun publish() {
-        pushPlaybackState()
-        pushMetadata()
-        pushNotification()
+        val nowMillis = System.currentTimeMillis()
+        pushPlaybackState(nowMillis)
+        pushMetadata(nowMillis)
+        pushNotification(nowMillis)
+        // 位置+1x 速度由系统外推进度；整点余量到期时延长分母。
+        // 任意发布都会重排同一个回调，不叠加计时任务。
+        durationHandler.removeCallbacks(durationRefresh)
+        if (isForeground) {
+            LivePlaybackTiming.nextRefreshDelayMillis(startedAtMillis, nowMillis)?.let {
+                durationHandler.postDelayed(durationRefresh, it)
+            }
+        }
     }
 
-    private fun pushPlaybackState() {
+    private fun pushPlaybackState(nowMillis: Long) {
         val playing = playbackState == PlaybackState.STATE_PLAYING
         val state = PlaybackState.Builder()
             .setActions(
@@ -315,20 +332,30 @@ class PlaybackService : Service() {
             )
             .setState(
                 playbackState,
-                PlaybackState.PLAYBACK_POSITION_UNKNOWN,
-                if (playing) 1f else 0f
+                LivePlaybackTiming.elapsedMillis(startedAtMillis, nowMillis)
+                    ?: PlaybackState.PLAYBACK_POSITION_UNKNOWN,
+                if (playing) 1f else 0f,
+                SystemClock.elapsedRealtime()
             )
             .build()
         mediaSession?.setPlaybackState(state)
     }
 
-    private fun pushMetadata() {
+    private fun pushMetadata(nowMillis: Long) {
+        val titleText = if (artist.isEmpty()) "Simple Live" else artist
+        val durationMillis = LivePlaybackTiming.durationMillis(startedAtMillis, nowMillis)
         val builder = MediaMetadata.Builder()
-            // 主行=主播名，副行=平台 · 直播标题。
-            .putString(MediaMetadata.METADATA_KEY_TITLE, if (artist.isEmpty()) "Simple Live" else artist)
+            // 主行=主播名，副行=平台 · 直播标题；时长在下方进度条实时走时。
+            .putString(MediaMetadata.METADATA_KEY_TITLE, titleText)
+            .putString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE, titleText)
             .putString(MediaMetadata.METADATA_KEY_ARTIST, metadataSubtitle())
             .putString(MediaMetadata.METADATA_KEY_ALBUM, metadataAlbum())
-            .putLong(MediaMetadata.METADATA_KEY_DURATION, -1L)
+            // 进度条分母 = 已播 + 余量。实时直播不可 seek，只用于显示。
+            // MediaMetadata 的时长单位是毫秒，不能写成秒，否则系统会显示成几秒。
+            .putLong(
+                MediaMetadata.METADATA_KEY_DURATION,
+                durationMillis ?: 0L
+            )
         artworkBitmap?.let {
             builder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, it)
             builder.putBitmap(MediaMetadata.METADATA_KEY_ART, it)
@@ -419,9 +446,9 @@ class PlaybackService : Service() {
 
     // region Notification
 
-    private fun pushNotification() {
+    private fun pushNotification(nowMillis: Long) {
         createChannel()
-        val notification = buildNotification()
+        val notification = buildNotification(nowMillis)
         if (!isForeground) {
             startForegroundCompat(notification)
             isForeground = true
@@ -465,7 +492,7 @@ class PlaybackService : Service() {
         manager.createNotificationChannel(channel)
     }
 
-    private fun buildNotification(): Notification {
+    private fun buildNotification(nowMillis: Long): Notification {
         val contentIntent = PendingIntent.getActivity(
             this,
             0,
@@ -533,9 +560,12 @@ class PlaybackService : Service() {
                     .setMediaSession(mediaSession?.sessionToken)
                     .setShowActionsInCompactView(0, 1, 2)
             )
-        // 有开播时间就让系统进度条按播放位置走时；未知时保持隐藏。
+        // 系统计时从直播间开播时刻算起，不是本机开始观看时刻；时钟偏差不倒计时。
         if (startedAtMillis > 0L) {
-            builder.setWhen(startedAtMillis).setUsesChronometer(true)
+            builder.setWhen(minOf(startedAtMillis, nowMillis))
+                .setShowWhen(true)
+                .setUsesChronometer(true)
+                .setChronometerCountDown(false)
         } else {
             builder.setShowWhen(false)
         }
@@ -564,6 +594,7 @@ class PlaybackService : Service() {
     }
 
     private fun stopPlayback() {
+        durationHandler.removeCallbacks(durationRefresh)
         startedAtMillis = 0L
         mediaSession?.isActive = false
         isForeground = false

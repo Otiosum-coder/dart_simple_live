@@ -75,7 +75,7 @@
 
 - [x] Android（已验证）
 - [x] Windows（已验证）
-- [x] macOS（可自行编译；本版本未提供构建产物）
+- [x] macOS（CI 手动构建，提供 arm64 / x64 ZIP 与 DMG）
 - [x] iOS（可自行编译；本版本未提供构建产物）
 - [x] Linux（CI 构建，未广泛实机验证）
 - [ ] Android TV（暂未提供构建）
@@ -89,11 +89,15 @@
 | **Android**（大多数手机） | `SimpleLive-x.y.z-arm64-v8a.apk` | 64 位 ARM，绝大多数手机选这个 |
 | Android（老设备） | `SimpleLive-x.y.z-armeabi-v7a.apk` | 32 位 ARM |
 | Android（模拟器） | `SimpleLive-x.y.z-x86_64.apk` | x86 设备 / 模拟器 |
-| **Windows** | `SimpleLive-x.y.z-windows-x64.zip` | 解压后运行 `simple_live_app.exe`，**整个文件夹需一起保留** |
-| **Linux** | `SimpleLive-x.y.z-linux-x64.zip` | 解压后运行 `bundle/simple_live_app` |
+| **Windows 便携版** | `SimpleLive-x.y.z-windows-x64.zip` | 解压后运行 `simple_live_app.exe`，**整个文件夹需一起保留** |
+| Windows 安装程序 | `SimpleLive-x.y.z-windows-x64-setup.exe` | 安装后可从开始菜单启动，并可卸载 |
+| **Linux 便携版** | `SimpleLive-x.y.z-linux-x64.zip` | 解压后运行 `bundle/simple_live_app` |
+| Linux Debian / Ubuntu | `SimpleLive-x.y.z-linux-x64.deb` | 使用系统软件包安装器安装 |
+| macOS Apple Silicon | `SimpleLive-x.y.z-macos-arm64.zip` / `SimpleLive-x.y.z-macos-arm64.dmg` | 手动构建；DMG 内可拖入 Applications |
+| macOS Intel | `SimpleLive-x.y.z-macos-x64.zip` / `SimpleLive-x.y.z-macos-x64.dmg` | 手动构建；DMG 内可拖入 Applications |
 
 > APK 使用正式签名，可直接覆盖安装升级，无需卸载旧版本。
-> 本版本 **1.12.0 仅提供 Android、Windows、Linux 产物**，暂不提供 macOS / iOS 构建；需要时可参考下方「自行编译」自行构建。
+> macOS ZIP / DMG 与 iOS IPA 仅在手动工作流中构建；macOS 包未公证，首次打开可能需要右键选择「打开」。iOS IPA 未签名。
 
 ## 自行编译
 

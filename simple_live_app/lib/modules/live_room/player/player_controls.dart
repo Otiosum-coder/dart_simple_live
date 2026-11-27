@@ -1220,7 +1220,7 @@ class SuperChatOverlayCard extends StatelessWidget {
                     ),
                     AppStyle.hGap8,
                     Text(
-                      message.price > 0 ? "￥${message.price}" : "免费",
+                      message.displayPrice,
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w700,

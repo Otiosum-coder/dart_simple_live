@@ -1,0 +1,19 @@
+Curated analyzer execution evidence
+Task: t4; attempt_id: f8b5a1b0-7013-4e3a-ac08-c0237a18cffa
+CWD: E:/Project/simple_live/dart_simple_live/simple_live_app
+Command: FLUTTER_SUPPRESS_ANALYTICS=true /e/Enviroment/sdk383/flutter/bin/flutter.bat analyze --no-pub
+Outcome: foreground completed; exitCode=1; timedOut=false; original output not truncated.
+Reported: 10 issues found. (ran in 87.7s)
+All severity=info; errors=0; warnings=0. Command did not pass.
+Diagnostic locations relative to simple_live_app:
+lib/app/log.dart:30:14 prefer_interpolation_to_compose_strings
+lib/modules/mine/account/huya/huya_udb_request.dart:23:28 prefer_interpolation_to_compose_strings
+lib/modules/mine/account/huya/huya_udb_request.dart:23:42 prefer_interpolation_to_compose_strings
+lib/modules/mine/account/huya/qr_login_controller.dart:96:22 prefer_interpolation_to_compose_strings
+lib/services/douyin_account_service.dart:7:8 implementation_imports
+lib/services/douyu_account_service.dart:9:8 implementation_imports
+lib/utils/danmaku_limit.dart:1:8 depend_on_referenced_packages (characters)
+lib/widgets/danmaku_input_bar.dart:1:8 unnecessary_import
+lib/widgets/danmaku_input_bar.dart:1:8 depend_on_referenced_packages (characters)
+lib/widgets/danmaku_input_bar.dart:222:26 prefer_const_constructors
+No fixes, formatting, dependency upgrades or source edits were made.
